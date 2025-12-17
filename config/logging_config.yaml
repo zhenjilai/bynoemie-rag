@@ -1,0 +1,96 @@
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  standard:
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+  
+  detailed:
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+  
+  json:
+    class: pythonjsonlogger.jsonlogger.JsonFormatter
+    format: "%(asctime)s %(name)s %(levelname)s %(message)s %(filename)s %(lineno)d"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    stream: ext://sys.stdout
+  
+  file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: detailed
+    filename: ./data/outputs/app.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf-8
+  
+  error_file:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: detailed
+    filename: ./data/outputs/error.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+
+loggers:
+  # Root logger
+  "":
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+  
+  # LLM module
+  src.llm:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+  
+  # Vibe generator
+  src.vibe_generator:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+  
+  # RAG module
+  src.rag:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+  
+  # Utils
+  src.utils:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+  
+  # LangChain/LangGraph
+  langchain:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+  
+  langgraph:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+# Log levels by environment
+environments:
+  development:
+    root_level: DEBUG
+    console_level: DEBUG
+  
+  staging:
+    root_level: INFO
+    console_level: INFO
+  
+  production:
+    root_level: WARNING
+    console_level: WARNING

@@ -1,0 +1,125 @@
+# Model Configuration for ByNoemie RAG Chatbot
+# Following best practices for maintainability and scalability
+
+# LLM Provider Settings
+llm:
+  # Primary provider (options: openai, anthropic, groq, ollama)
+  primary_provider: groq
+  
+  # Fallback chain order
+  fallback_chain:
+    - groq
+    - openai
+    - ollama
+  
+  # Provider-specific configurations
+  providers:
+    openai:
+      model: gpt-4o-mini
+      temperature: 0.7
+      max_tokens: 1000
+      timeout: 30
+      
+    anthropic:
+      model: claude-3-haiku-20240307
+      temperature: 0.7
+      max_tokens: 1000
+      timeout: 30
+      
+    groq:
+      model: llama-3.1-70b-versatile
+      temperature: 0.7
+      max_tokens: 1000
+      timeout: 30
+      
+    ollama:
+      model: llama3.2:3b
+      base_url: http://localhost:11434
+      temperature: 0.7
+      max_tokens: 1000
+      timeout: 60
+
+# Embedding Model Settings
+embeddings:
+  provider: sentence_transformers
+  model: all-MiniLM-L6-v2
+  dimension: 384
+  batch_size: 32
+  cache_enabled: true
+
+# Vector Store Settings
+vector_store:
+  provider: chroma
+  persist_directory: ./data/embeddings/chroma_db
+  distance_metric: cosine
+  
+  # Dual-collection architecture
+  collections:
+    products:
+      name: bynoemie_products
+      description: "Product attributes (name, description, colors, material)"
+    vibes:
+      name: bynoemie_product_vibes
+      description: "Vibe tags and mood summaries"
+
+# RAG Settings
+rag:
+  retrieval:
+    top_k: 5
+    similarity_threshold: 0.5
+    
+    # Dual-collection search weighting
+    # Based on experiments: vibe-weighted performs best for intent queries
+    search_weights:
+      products: 0.4    # Product attributes weight
+      vibes: 0.6       # Vibe tags weight (higher for intent-based queries)
+    
+    # Alternative: Hybrid search with BM25
+    hybrid_search:
+      enabled: false
+      bm25_weight: 0.3
+      semantic_weight: 0.7
+  
+  reranking:
+    enabled: false  # Enable for >5K products
+    model: cross-encoder/ms-marco-TinyBERT-L-2-v2  # Fastest acceptable
+    top_k: 10  # Rerank top 10, return top 5
+
+# Vibe Generator Settings
+vibe_generator:
+  mode: freeform  # options: constrained, freeform, hybrid
+  tags_per_product: 10
+  batch_size: 3
+  
+  # LangGraph workflow settings
+  workflow:
+    max_retries: 3
+    timeout: 60
+    checkpointing: true
+
+# Rate Limiting
+rate_limits:
+  groq:
+    requests_per_minute: 30
+    tokens_per_minute: 15000
+  openai:
+    requests_per_minute: 60
+    tokens_per_minute: 90000
+  anthropic:
+    requests_per_minute: 50
+    tokens_per_minute: 100000
+
+# Caching
+cache:
+  enabled: true
+  ttl_seconds: 3600
+  max_size: 1000
+  backend: disk  # options: memory, disk, redis
+  directory: ./data/cache
+
+# LangSmith Tracing
+langsmith:
+  enabled: true
+  project_name: bynoemie-rag-chatbot
+  trace_all: true
+  log_level: INFO

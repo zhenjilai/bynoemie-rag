@@ -1,0 +1,328 @@
+"""
+Chain Prompts Example
+
+Demonstrates prompt chaining using LangChain LCEL and LangGraph workflows.
+
+This example shows:
+1. Simple LangChain chains (LCEL)
+2. Multi-step processing chains
+3. LangGraph stateful workflows
+4. Complete vibe generation pipeline
+
+Usage:
+    export GROQ_API_KEY="your_key"
+    python examples/chain_prompts.py
+"""
+
+import os
+import sys
+import json
+from pathlib import Path
+from typing import Dict, Any
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+def example_simple_chain():
+    """Simple LangChain LCEL chain"""
+    print("=" * 60)
+    print("Example 1: Simple LCEL Chain")
+    print("=" * 60)
+    
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import StrOutputParser
+    from src.llm import create_llm_client
+    
+    # Get LangChain model
+    client = create_llm_client()
+    llm = client.get_langchain_model()
+    
+    # Create simple chain: prompt -> llm -> parse
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are a fashion expert. Be concise."),
+        ("human", "Describe the vibe of a {color} {item} in exactly 5 words.")
+    ])
+    
+    chain = prompt | llm | StrOutputParser()
+    
+    # Run chain
+    result = chain.invoke({
+        "color": "black",
+        "item": "sequin mini dress"
+    })
+    
+    print(f"\nInput: black sequin mini dress")
+    print(f"Output: {result}")
+
+
+def example_multi_step_chain():
+    """Multi-step processing chain"""
+    print("\n" + "=" * 60)
+    print("Example 2: Multi-Step Chain")
+    print("=" * 60)
+    
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import JsonOutputParser
+    from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+    from src.llm import create_llm_client
+    
+    client = create_llm_client()
+    llm = client.get_langchain_model()
+    
+    # Step 1: Analyze product
+    analyze_prompt = ChatPromptTemplate.from_messages([
+        ("system", "Analyze this product. Return JSON only."),
+        ("human", """Product: {product_name}
+Description: {description}
+
+Return JSON: {{"features": [...], "occasions": [...], "style": "..."}}""")
+    ])
+    
+    # Step 2: Generate vibes based on analysis
+    vibe_prompt = ChatPromptTemplate.from_messages([
+        ("system", "Generate creative vibe tags. Return JSON only."),
+        ("human", """Based on this analysis:
+{analysis}
+
+Create 5 evocative vibe tags.
+Return JSON: {{"vibe_tags": [...], "mood": "..."}}""")
+    ])
+    
+    # Build chain
+    chain = (
+        RunnablePassthrough()
+        | RunnableLambda(lambda x: {
+            **x,
+            "analysis": (analyze_prompt | llm | JsonOutputParser()).invoke(x)
+        })
+        | RunnableLambda(lambda x: {
+            **x,
+            "vibes": (vibe_prompt | llm | JsonOutputParser()).invoke({
+                "analysis": json.dumps(x["analysis"])
+            })
+        })
+    )
+    
+    # Run
+    result = chain.invoke({
+        "product_name": "Coco Dress",
+        "description": "Ultra-mini sequin dress with open back"
+    })
+    
+    print(f"\nAnalysis: {result['analysis']}")
+    print(f"Vibes: {result['vibes']}")
+
+
+def example_parallel_chains():
+    """Running chains in parallel"""
+    print("\n" + "=" * 60)
+    print("Example 3: Parallel Chains")
+    print("=" * 60)
+    
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.runnables import RunnableParallel
+    from src.llm import create_llm_client
+    
+    client = create_llm_client()
+    llm = client.get_langchain_model()
+    
+    # Define parallel tasks
+    occasion_chain = (
+        ChatPromptTemplate.from_template("What occasion is a {item} best for? Answer in one word.")
+        | llm | StrOutputParser()
+    )
+    
+    mood_chain = (
+        ChatPromptTemplate.from_template("What mood does a {item} evoke? Answer in one word.")
+        | llm | StrOutputParser()
+    )
+    
+    style_chain = (
+        ChatPromptTemplate.from_template("What style category is a {item}? Answer in one word.")
+        | llm | StrOutputParser()
+    )
+    
+    # Run in parallel
+    parallel_chain = RunnableParallel(
+        occasion=occasion_chain,
+        mood=mood_chain,
+        style=style_chain
+    )
+    
+    result = parallel_chain.invoke({"item": "red satin evening gown"})
+    
+    print(f"\nParallel analysis of 'red satin evening gown':")
+    print(f"  Occasion: {result['occasion']}")
+    print(f"  Mood: {result['mood']}")
+    print(f"  Style: {result['style']}")
+
+
+def example_langgraph_workflow():
+    """LangGraph stateful workflow"""
+    print("\n" + "=" * 60)
+    print("Example 4: LangGraph Workflow")
+    print("=" * 60)
+    
+    try:
+        from src.vibe_generator import create_vibe_generator
+        
+        # Create generator (uses LangGraph)
+        generator = create_vibe_generator(enable_checkpointing=False)
+        
+        # Generate vibes
+        result = generator.generate(
+            product_id="test-001",
+            product_name="Ella Dress",
+            product_type="Dress",
+            description="A stunning mini dress with cut-out details and a daring silhouette. Perfect for making a statement at any event.",
+            colors="Black, Red",
+            material="Stretch fabric",
+            price=389.00,
+            currency="MYR"
+        )
+        
+        print(f"\nProduct: {result['product_name']}")
+        print(f"Status: {result['status']}")
+        print(f"Vibe Tags: {result['vibe_tags']}")
+        if result.get('mood_summary'):
+            print(f"Mood: {result['mood_summary']}")
+        
+    except ImportError as e:
+        print(f"LangGraph not available: {e}")
+        print("Install with: pip install langgraph")
+
+
+def example_vibe_pipeline():
+    """Complete vibe generation pipeline"""
+    print("\n" + "=" * 60)
+    print("Example 5: Complete Vibe Pipeline")
+    print("=" * 60)
+    
+    from src.vibe_generator import extract_vibes_from_product, get_vibe_scores
+    from src.llm import create_llm_client, parse_json_response
+    
+    # Sample product
+    product = {
+        "product_name": "Tiara Satin Dress",
+        "product_type": "Dress",
+        "product_description": "Feminine with a touch of fantasy. Features a silky draped neckline, sheer embellished bust detail, and open back with gathered straps.",
+        "colors_available": "White, Champagne",
+        "material": "Silk, Satin"
+    }
+    
+    print(f"\nProduct: {product['product_name']}")
+    print("-" * 40)
+    
+    # Step 1: Rule-based extraction
+    rule_vibes = extract_vibes_from_product(product)
+    print(f"\n1. Rule-based vibes: {rule_vibes}")
+    
+    # Step 2: LLM enhancement
+    try:
+        client = create_llm_client()
+        
+        prompt = f"""Enhance these vibe tags for a luxury fashion product:
+
+Product: {product['product_name']}
+Description: {product['product_description']}
+Colors: {product['colors_available']}
+Material: {product['material']}
+
+Initial tags: {', '.join(rule_vibes)}
+
+Generate 5 more creative, evocative tags. Be specific and memorable.
+Return JSON: {{"enhanced_tags": [...], "mood_summary": "..."}}"""
+
+        response = client.chat(
+            system_prompt="You are a luxury fashion stylist. Be creative and evocative.",
+            user_prompt=prompt,
+            temperature=0.8
+        )
+        
+        enhanced = parse_json_response(response.content)
+        print(f"\n2. LLM enhanced: {enhanced.get('enhanced_tags', [])}")
+        print(f"   Mood: {enhanced.get('mood_summary', 'N/A')}")
+        
+        # Combine
+        all_vibes = list(set(rule_vibes + enhanced.get('enhanced_tags', [])))
+        print(f"\n3. Combined vibes: {all_vibes}")
+        
+    except Exception as e:
+        print(f"\nLLM enhancement failed: {e}")
+
+
+def example_with_tracing():
+    """Example with LangSmith tracing"""
+    print("\n" + "=" * 60)
+    print("Example 6: LangSmith Tracing")
+    print("=" * 60)
+    
+    langsmith_key = os.getenv("LANGCHAIN_API_KEY")
+    
+    if not langsmith_key:
+        print("\n⚠️  LangSmith not configured")
+        print("Set LANGCHAIN_API_KEY to enable tracing")
+        print("Get a key at: https://smith.langchain.com")
+        return
+    
+    # Enable tracing
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_PROJECT"] = "bynoemie-examples"
+    
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import StrOutputParser
+    from src.llm import create_llm_client
+    
+    print("\n✅ LangSmith tracing enabled!")
+    print(f"Project: bynoemie-examples")
+    print("View traces at: https://smith.langchain.com")
+    
+    client = create_llm_client()
+    llm = client.get_langchain_model()
+    
+    # Run a traced chain
+    chain = (
+        ChatPromptTemplate.from_template("Generate a fashion tagline for {product}")
+        | llm
+        | StrOutputParser()
+    )
+    
+    result = chain.invoke({"product": "sequin evening dress"})
+    print(f"\nResult: {result}")
+    print("\n📊 Check LangSmith dashboard for trace details")
+
+
+def main():
+    """Run all chain examples"""
+    print("\n🔥 ByNoemie RAG - Prompt Chaining Examples\n")
+    
+    # Check for API keys
+    has_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
+    
+    if not has_key:
+        print("⚠️  Set GROQ_API_KEY or OPENAI_API_KEY first")
+        print("Get free Groq key at: https://console.groq.com")
+        return
+    
+    try:
+        example_simple_chain()
+        example_multi_step_chain()
+        example_parallel_chains()
+        example_langgraph_workflow()
+        example_vibe_pipeline()
+        example_with_tracing()
+        
+        print("\n" + "=" * 60)
+        print("✅ All examples completed!")
+        print("=" * 60)
+        
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()
