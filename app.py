@@ -364,7 +364,7 @@ INTENTS:
 - GREETING: Hello, hi, hey
 - RECOMMENDATION: Show me, recommend, suggest, looking for, outfit for occasion, show me shoes/dresses/bags, what heels do you have, browse category, "all dresses", "your shoes"
 - STOCK_CHECK: In stock, available, sizes, do you have, stock for this/it
-- PRODUCT_INFO: Tell me about, what is, describe (ONLY for products)
+- PRODUCT_INFO: Tell me about, what is, describe, what color/colour, what size, what material, how does it fit (ONLY for products)
 - PRICE_CHECK: How much, price, cost (ONLY for products)
 - POLICY_QUESTION: Returns, refunds, shipping, terms, exchange, delivery time
 - ORDER_CREATE: Order, buy, purchase, add to cart
@@ -374,18 +374,23 @@ INTENTS:
 - OFF_TOPIC: ANY question not related to fashion, products, or store operations
 - GENERAL: Other fashion-related questions
 
-IMPORTANT RULE: If user asks to SEE or SHOW products from a category (shoes, dresses, heels, bags, etc.), ALWAYS classify as RECOMMENDATION. Do NOT ask for clarification - show the products first.
+IMPORTANT RULES:
+1. If user asks to SEE or SHOW products from a category, classify as RECOMMENDATION.
+2. If user asks about specific product attributes (color, size, material, price), classify as PRODUCT_INFO.
+3. If user refers to "this dress", "it", "this one", look at previous messages to find which product they mean.
 
 Examples:
 - "show me all shoes" -> RECOMMENDATION
-- "what heels do you have" -> RECOMMENDATION
-- "I want to see dresses" -> RECOMMENDATION
-- "show me bags" -> RECOMMENDATION
+- "what colour is this dress" -> PRODUCT_INFO (extract product name from context)
+- "what colors does it come in" -> PRODUCT_INFO
+- "what size should I get" -> PRODUCT_INFO
+- "what material is it made of" -> PRODUCT_INFO
+- "tell me about the Ella Dress" -> PRODUCT_INFO
 
 AVAILABLE PRODUCTS: {}
 
 Analyze the conversation and return ONLY JSON:
-{{"intent": "INTENT_NAME", "product_mentioned": "exact product name from conversation or null", "size": "size if mentioned or null", "color": "color if mentioned or null"}}""".format(', '.join(product_names[:20]))
+{{"intent": "INTENT_NAME", "product_mentioned": "exact product name from conversation or context or null", "size": "size if mentioned or null", "color": "color if mentioned or null"}}""".format(', '.join(product_names[:20]))
 
     # Build messages with full chat history
     messages = [{"role": "system", "content": system_prompt}]
@@ -473,8 +478,9 @@ def fallback_classify(query: str, product_names: List[str], current_product: Opt
         'ship', 'delivery', 'refund', 'return', 'exchange', 'policy',
         'recommend', 'suggest', 'show', 'looking for', 'style', 'fashion',
         'wedding', 'party', 'dinner', 'date', 'occasion', 'formal', 'casual',
-        'romantic', 'elegant', 'chic', 'color', 'fabric', 'material',
-        'shoes', 'shoe', 'footwear', 'sandal', 'purse', 'clutch', 'sets', 'set'
+        'romantic', 'elegant', 'chic', 'color', 'colour', 'fabric', 'material',
+        'shoes', 'shoe', 'footwear', 'sandal', 'purse', 'clutch', 'sets', 'set',
+        'this dress', 'this one', 'that one', 'it'
     ]
     
     # Broad category keywords that should trigger RECOMMENDATION
@@ -487,11 +493,22 @@ def fallback_classify(query: str, product_names: List[str], current_product: Opt
         'sets', 'set', 'co-ord'
     ]
     
+    # Specific attribute questions - should be PRODUCT_INFO
+    attribute_questions = [
+        'what color', 'what colour', 'what colors', 'what colours',
+        'what size', 'what sizes', 'size guide',
+        'what material', 'what fabric', 'made of', 'made from',
+        'how does it fit', 'fit like', 'true to size'
+    ]
+    
     # Check if query is fashion-related
     is_fashion_related = any(kw in q for kw in fashion_keywords) or product_mentioned
     
     # Check if query is asking for a category
     is_category_query = any(cat in q for cat in category_keywords)
+    
+    # Check if asking about specific product attributes
+    is_attribute_question = any(attr in q for attr in attribute_questions)
     
     # Determine intent
     if any(g in q for g in ['bye', 'goodbye', 'end chat']):
@@ -500,6 +517,9 @@ def fallback_classify(query: str, product_names: List[str], current_product: Opt
         result["intent"] = "GREETING"
     elif any(p in q for p in ['return', 'refund', 'exchange', 'shipping', 'policy', 'delivery', 'how long']):
         result["intent"] = "POLICY_QUESTION"
+    elif is_attribute_question:
+        # Specific attribute questions go to PRODUCT_INFO
+        result["intent"] = "PRODUCT_INFO"
     elif any(s in q for s in ['in stock', 'available', 'do you have']) and not is_category_query:
         result["intent"] = "STOCK_CHECK"
     elif 'cancel' in q and 'order' in q:
@@ -1271,25 +1291,73 @@ Be conversational, not robotic.""".format(query, len(results), ctx)
             # === PRODUCT INFO ===
             elif intent == "PRODUCT_INFO":
                 if product:
-                    info = "{} - {} {}\n{}\nPerfect for: {}".format(
-                        product['product_name'],
-                        product.get('price_currency', 'MYR'),
-                        product.get('price_min', 0),
-                        product.get('mood_summary', ''),
-                        product.get('ideal_for', '')
-                    )
-                    if client:
-                        messages = [
-                            {"role": "system", "content": "Describe product elegantly."},
-                            {"role": "user", "content": info}
-                        ]
-                        response = stream_response(client, messages, response_placeholder) or info
+                    # Detect what specific info user is asking about
+                    q_lower = query.lower()
+                    
+                    # Extract product attributes
+                    colors = product.get('colors_available', 'Not specified')
+                    sizes = product.get('size_options', 'Not specified')
+                    price = "{} {}".format(product.get('price_currency', 'MYR'), product.get('price_min', 0))
+                    materials = ', '.join(product.get('materials', [])) or product.get('material', 'Not specified')
+                    name = product.get('product_name', '')
+                    description = product.get('product_description', '')
+                    
+                    # Determine what user is asking about
+                    specific_answer = None
+                    
+                    if any(w in q_lower for w in ['colour', 'color', 'colours', 'colors']):
+                        specific_answer = "The {} comes in: **{}**".format(name, colors)
+                    elif any(w in q_lower for w in ['size', 'sizes', 'fit', 'fitting']):
+                        specific_answer = "The {} is available in: **{}**".format(name, sizes)
+                    elif any(w in q_lower for w in ['price', 'cost', 'how much']):
+                        specific_answer = "The {} is priced at **{}**".format(name, price)
+                    elif any(w in q_lower for w in ['material', 'fabric', 'made of', 'made from']):
+                        specific_answer = "The {} is made of: **{}**".format(name, materials)
+                    elif any(w in q_lower for w in ['available', 'in stock', 'stock']):
+                        fresh_stock = reload_stock()
+                        stock_info = get_stock_info(product, fresh_stock)
+                        specific_answer = stock_info
+                    
+                    if specific_answer:
+                        # Answer the specific question directly
+                        if client:
+                            messages = [
+                                {"role": "system", "content": """You are a helpful fashion assistant. 
+Answer the customer's specific question FIRST in 1 sentence using the info provided.
+Then optionally add ONE brief styling tip or suggestion (1 sentence max).
+Keep it SHORT and DIRECT. No bullet points."""},
+                                {"role": "user", "content": "Customer asked: {}\nAnswer: {}\nProduct: {}".format(query, specific_answer, name)}
+                            ]
+                            response = stream_response(client, messages, response_placeholder)
+                        if not response:
+                            response = specific_answer
+                            response_placeholder.markdown(response)
                     else:
-                        response = info
-                        response_placeholder.markdown(response)
+                        # General product info request
+                        info = "{} - {}\n{}\nColors: {} | Sizes: {}".format(
+                            name, price, 
+                            product.get('mood_summary', description[:200]),
+                            colors, sizes
+                        )
+                        if client:
+                            messages = [
+                                {"role": "system", "content": "Describe product in 2-3 sentences. Mention key details. Be concise."},
+                                {"role": "user", "content": info}
+                            ]
+                            response = stream_response(client, messages, response_placeholder) or info
+                        else:
+                            response = info
+                            response_placeholder.markdown(response)
                     show_products = [product]
                 else:
-                    response = "Which product would you like to know about?"
+                    # Try to find product from context or search
+                    if st.session_state.get('current_product'):
+                        product = find_product(st.session_state.current_product, products)
+                        if product:
+                            # Re-process with found product
+                            st.session_state.messages.append({"role": "user", "content": query})
+                            st.rerun()
+                    response = "Which product would you like to know about? Please mention the name."
                     response_placeholder.markdown(response)
             
             # === POLICY ===
