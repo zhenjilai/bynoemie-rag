@@ -95,8 +95,9 @@ jupyter>=1.0.0
 # OPTIONAL: WEB SERVER
 # =============================================================================
 fastapi>=0.110.0
-uvicorn>=0.30.0
-sse-starlette>=2.0.0     # Server-sent events
+uvicorn[standard]>=0.30.0
+gunicorn>=21.0.0           # Production WSGI server
+sse-starlette>=2.0.0       # Server-sent events
 
 # =============================================================================
 # OPTIONAL: ADVANCED FEATURES
@@ -104,3 +105,7 @@ sse-starlette>=2.0.0     # Server-sent events
 # rank-bm25>=0.2.2       # Hybrid search
 # cohere>=5.0.0          # Reranking
 # unstructured>=0.14.0   # Document processing
+
+# Additional dependencies
+beautifulsoup4>=4.12.0
+requests>=2.31.0

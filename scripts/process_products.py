@@ -68,28 +68,36 @@ def load_environment():
 
 def process_csv(args):
     """Process CSV file and generate vibes"""
-    from src.rag import ProductDatabase, DataProcessor
-    
     csv_path = Path(args.csv)
     if not csv_path.exists():
         logger.error(f"CSV file not found: {csv_path}")
         return
     
-    # Initialize database
-    db = ProductDatabase(persist_directory=args.db_path)
+    print("\n" + "="*60)
+    print("🚀 Starting product processing...")
+    print("="*60)
     
-    # Initialize processor
+    # Step 1: Initialize database (downloads embedding model on first run)
+    print("\n📦 Step 1: Initializing database...")
+    print("   (First run downloads ~90MB embedding model - please wait)")
+    
+    from src.rag import ProductDatabase, DataProcessor
+    db = ProductDatabase(persist_directory=args.db_path)
+    print("   ✅ Database initialized")
+    
+    # Step 2: Initialize processor
+    print("\n⚙️  Step 2: Initializing vibe generator...")
+    print(f"   Method: {args.method}")
+    
     processor = DataProcessor(
         database=db,
         vibe_method=args.method
     )
+    print("   ✅ Vibe generator ready")
     
-    # Process CSV
-    logger.info(f"\n{'='*60}")
-    logger.info(f"Processing: {csv_path}")
-    logger.info(f"Method: {args.method}")
-    logger.info(f"Force regenerate: {args.force}")
-    logger.info(f"{'='*60}\n")
+    # Step 3: Process CSV
+    print("\n📄 Step 3: Processing CSV file...")
+    print(f"   File: {csv_path}")
     
     stats = processor.process_csv(
         csv_path=str(csv_path),

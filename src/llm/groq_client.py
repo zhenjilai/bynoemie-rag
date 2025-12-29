@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class GroqClient(BaseLLMClient):
     """Groq LLM client - FREE tier with fast inference"""
     
-    DEFAULT_MODEL = "llama-3.1-70b-versatile"
+    DEFAULT_MODEL = "llama-3.3-70b-versatile"
     
     def __init__(
         self,

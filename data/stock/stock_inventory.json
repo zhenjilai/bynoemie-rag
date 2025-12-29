@@ -1,0 +1,1474 @@
+[
+  {
+    "product_id": "9763570811170",
+    "product_name": "Coco Dress",
+    "total_inventory": 9,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Black",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9763570811170-FR-BLA"
+      },
+      {
+        "size": "Free Size",
+        "color": "Gold",
+        "quantity": 5,
+        "status": "in_stock",
+        "sku": "9763570811170-FR-GOL"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773307363618",
+    "product_name": "Ella Dress",
+    "total_inventory": 3,
+    "variants": [
+      {
+        "size": "M",
+        "color": "White",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9773307363618-M-WHI"
+      },
+      {
+        "size": "S",
+        "color": "White",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9773307363618-S-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9763112714530",
+    "product_name": "Chantelle Heels",
+    "total_inventory": 280,
+    "variants": [
+      {
+        "size": "36",
+        "color": "Black",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9763112714530-36-BLA"
+      },
+      {
+        "size": "36",
+        "color": "Dark Brown",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9763112714530-36-DAR"
+      },
+      {
+        "size": "36",
+        "color": "Metal black",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9763112714530-36-MET"
+      },
+      {
+        "size": "36",
+        "color": "Nude",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9763112714530-36-NUD"
+      },
+      {
+        "size": "36",
+        "color": "Pink",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9763112714530-36-PIN"
+      },
+      {
+        "size": "36",
+        "color": "White",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9763112714530-36-WHI"
+      },
+      {
+        "size": "37",
+        "color": "Black",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9763112714530-37-BLA"
+      },
+      {
+        "size": "37",
+        "color": "Dark Brown",
+        "quantity": 7,
+        "status": "in_stock",
+        "sku": "9763112714530-37-DAR"
+      },
+      {
+        "size": "37",
+        "color": "Metal black",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9763112714530-37-MET"
+      },
+      {
+        "size": "37",
+        "color": "Nude",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763112714530-37-NUD"
+      },
+      {
+        "size": "37",
+        "color": "Pink",
+        "quantity": 5,
+        "status": "in_stock",
+        "sku": "9763112714530-37-PIN"
+      },
+      {
+        "size": "37",
+        "color": "White",
+        "quantity": 6,
+        "status": "in_stock",
+        "sku": "9763112714530-37-WHI"
+      },
+      {
+        "size": "38",
+        "color": "Black",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763112714530-38-BLA"
+      },
+      {
+        "size": "38",
+        "color": "Dark Brown",
+        "quantity": 21,
+        "status": "in_stock",
+        "sku": "9763112714530-38-DAR"
+      },
+      {
+        "size": "38",
+        "color": "Metal black",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9763112714530-38-MET"
+      },
+      {
+        "size": "38",
+        "color": "Nude",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9763112714530-38-NUD"
+      },
+      {
+        "size": "38",
+        "color": "Pink",
+        "quantity": 30,
+        "status": "in_stock",
+        "sku": "9763112714530-38-PIN"
+      },
+      {
+        "size": "38",
+        "color": "White",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763112714530-38-WHI"
+      },
+      {
+        "size": "39",
+        "color": "Black",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9763112714530-39-BLA"
+      },
+      {
+        "size": "39",
+        "color": "Dark Brown",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9763112714530-39-DAR"
+      },
+      {
+        "size": "39",
+        "color": "Metal black",
+        "quantity": 13,
+        "status": "in_stock",
+        "sku": "9763112714530-39-MET"
+      },
+      {
+        "size": "39",
+        "color": "Nude",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9763112714530-39-NUD"
+      },
+      {
+        "size": "39",
+        "color": "Pink",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9763112714530-39-PIN"
+      },
+      {
+        "size": "39",
+        "color": "White",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763112714530-39-WHI"
+      },
+      {
+        "size": "40",
+        "color": "Black",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9763112714530-40-BLA"
+      },
+      {
+        "size": "40",
+        "color": "Dark Brown",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9763112714530-40-DAR"
+      },
+      {
+        "size": "40",
+        "color": "Metal black",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763112714530-40-MET"
+      },
+      {
+        "size": "40",
+        "color": "Nude",
+        "quantity": 14,
+        "status": "in_stock",
+        "sku": "9763112714530-40-NUD"
+      },
+      {
+        "size": "40",
+        "color": "Pink",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9763112714530-40-PIN"
+      },
+      {
+        "size": "40",
+        "color": "White",
+        "quantity": 6,
+        "status": "in_stock",
+        "sku": "9763112714530-40-WHI"
+      },
+      {
+        "size": "41",
+        "color": "Black",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9763112714530-41-BLA"
+      },
+      {
+        "size": "41",
+        "color": "Dark Brown",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9763112714530-41-DAR"
+      },
+      {
+        "size": "41",
+        "color": "Metal black",
+        "quantity": 9,
+        "status": "in_stock",
+        "sku": "9763112714530-41-MET"
+      },
+      {
+        "size": "41",
+        "color": "Nude",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9763112714530-41-NUD"
+      },
+      {
+        "size": "41",
+        "color": "Pink",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9763112714530-41-PIN"
+      },
+      {
+        "size": "41",
+        "color": "White",
+        "quantity": 5,
+        "status": "in_stock",
+        "sku": "9763112714530-41-WHI"
+      },
+      {
+        "size": "42",
+        "color": "Black",
+        "quantity": 6,
+        "status": "in_stock",
+        "sku": "9763112714530-42-BLA"
+      },
+      {
+        "size": "42",
+        "color": "Dark Brown",
+        "quantity": 28,
+        "status": "in_stock",
+        "sku": "9763112714530-42-DAR"
+      },
+      {
+        "size": "42",
+        "color": "Metal black",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9763112714530-42-MET"
+      },
+      {
+        "size": "42",
+        "color": "Nude",
+        "quantity": 12,
+        "status": "in_stock",
+        "sku": "9763112714530-42-NUD"
+      },
+      {
+        "size": "42",
+        "color": "Pink",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763112714530-42-PIN"
+      },
+      {
+        "size": "42",
+        "color": "White",
+        "quantity": 23,
+        "status": "in_stock",
+        "sku": "9763112714530-42-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9699997516066",
+    "product_name": "Valeria Bodycon Dress",
+    "total_inventory": 30,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Black",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9699997516066-M-BLA"
+      },
+      {
+        "size": "S",
+        "color": "Black",
+        "quantity": 29,
+        "status": "in_stock",
+        "sku": "9699997516066-S-BLA"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9800639152418",
+    "product_name": "Kylie Jumpsuit",
+    "total_inventory": 32,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Beige",
+        "quantity": 21,
+        "status": "in_stock",
+        "sku": "9800639152418-M-BEI"
+      },
+      {
+        "size": "M",
+        "color": "Black",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9800639152418-M-BLA"
+      },
+      {
+        "size": "S",
+        "color": "Beige",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9800639152418-S-BEI"
+      },
+      {
+        "size": "S",
+        "color": "Black",
+        "quantity": 6,
+        "status": "in_stock",
+        "sku": "9800639152418-S-BLA"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773314081058",
+    "product_name": "Tiara Satin Dress",
+    "total_inventory": 8,
+    "variants": [
+      {
+        "size": "M",
+        "color": "White",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9773314081058-M-WHI"
+      },
+      {
+        "size": "S",
+        "color": "White",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9773314081058-S-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773308477730",
+    "product_name": "Maddison Dress",
+    "total_inventory": 11,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Gold",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9773308477730-M-GOL"
+      },
+      {
+        "size": "S",
+        "color": "Gold",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9773308477730-S-GOL"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773303169314",
+    "product_name": "Camilia Flora Dress",
+    "total_inventory": 16,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Floral",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9773303169314-M-FLO"
+      },
+      {
+        "size": "S",
+        "color": "Floral",
+        "quantity": 15,
+        "status": "in_stock",
+        "sku": "9773303169314-S-FLO"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773298647330",
+    "product_name": "Alexandria Set",
+    "total_inventory": 14,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Black",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9773298647330-M-BLA"
+      },
+      {
+        "size": "S",
+        "color": "Black",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9773298647330-S-BLA"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9763561242914",
+    "product_name": "Annabelle Dress",
+    "total_inventory": 18,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Black",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9763561242914-M-BLA"
+      },
+      {
+        "size": "M",
+        "color": "White",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9763561242914-M-WHI"
+      },
+      {
+        "size": "S",
+        "color": "Black",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9763561242914-S-BLA"
+      },
+      {
+        "size": "S",
+        "color": "White",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9763561242914-S-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9762646360354",
+    "product_name": "The Sienna",
+    "total_inventory": 25,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Beige",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9762646360354-FR-BEI"
+      },
+      {
+        "size": "Free Size",
+        "color": "Black",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9762646360354-FR-BLA"
+      },
+      {
+        "size": "Free Size",
+        "color": "Brown",
+        "quantity": 11,
+        "status": "in_stock",
+        "sku": "9762646360354-FR-BRO"
+      },
+      {
+        "size": "Free Size",
+        "color": "White",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9762646360354-FR-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9769077768482",
+    "product_name": "Vera",
+    "total_inventory": 23,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Black",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9769077768482-FR-BLA"
+      },
+      {
+        "size": "Free Size",
+        "color": "Gray",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9769077768482-FR-GRA"
+      },
+      {
+        "size": "Free Size",
+        "color": "Maroon",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9769077768482-FR-MAR"
+      },
+      {
+        "size": "Free Size",
+        "color": "Olive Green",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9769077768482-FR-OLI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9769071804706",
+    "product_name": "Dahlia",
+    "total_inventory": 44,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Black",
+        "quantity": 9,
+        "status": "in_stock",
+        "sku": "9769071804706-FR-BLA"
+      },
+      {
+        "size": "Free Size",
+        "color": "Dark Brown",
+        "quantity": 19,
+        "status": "in_stock",
+        "sku": "9769071804706-FR-DAR"
+      },
+      {
+        "size": "Free Size",
+        "color": "Maroon",
+        "quantity": 16,
+        "status": "in_stock",
+        "sku": "9769071804706-FR-MAR"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9763569828130",
+    "product_name": "Luna Dress",
+    "total_inventory": 56,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Black",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9763569828130-M-BLA"
+      },
+      {
+        "size": "M",
+        "color": "White",
+        "quantity": 20,
+        "status": "in_stock",
+        "sku": "9763569828130-M-WHI"
+      },
+      {
+        "size": "S",
+        "color": "Black",
+        "quantity": 27,
+        "status": "in_stock",
+        "sku": "9763569828130-S-BLA"
+      },
+      {
+        "size": "S",
+        "color": "White",
+        "quantity": 5,
+        "status": "in_stock",
+        "sku": "9763569828130-S-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9763567272226",
+    "product_name": "Leila Dress",
+    "total_inventory": 11,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Black",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763567272226-M-BLA"
+      },
+      {
+        "size": "S",
+        "color": "Black",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9763567272226-S-BLA"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9945433571618",
+    "product_name": "Yuna Set",
+    "total_inventory": 11,
+    "variants": [
+      {
+        "size": "Freesize",
+        "color": "Default",
+        "quantity": 11,
+        "status": "in_stock",
+        "sku": "9945433571618-FR-DEF"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9854147658018",
+    "product_name": "Dianna Dress",
+    "total_inventory": 7,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Default",
+        "quantity": 7,
+        "status": "in_stock",
+        "sku": "9854147658018-M-DEF"
+      },
+      {
+        "size": "S",
+        "color": "Default",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9854147658018-S-DEF"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773311525154",
+    "product_name": "Monica Dress",
+    "total_inventory": 34,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Beige",
+        "quantity": 20,
+        "status": "in_stock",
+        "sku": "9773311525154-M-BEI"
+      },
+      {
+        "size": "M",
+        "color": "Brown",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9773311525154-M-BRO"
+      },
+      {
+        "size": "S",
+        "color": "Beige",
+        "quantity": 13,
+        "status": "in_stock",
+        "sku": "9773311525154-S-BEI"
+      },
+      {
+        "size": "S",
+        "color": "Brown",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9773311525154-S-BRO"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9800636465442",
+    "product_name": "Leslie Dress",
+    "total_inventory": 32,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Gold",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9800636465442-M-GOL"
+      },
+      {
+        "size": "S",
+        "color": "Gold",
+        "quantity": 28,
+        "status": "in_stock",
+        "sku": "9800636465442-S-GOL"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9775129624866",
+    "product_name": "The Classic",
+    "total_inventory": 13,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Black",
+        "quantity": 5,
+        "status": "in_stock",
+        "sku": "9775129624866-FR-BLA"
+      },
+      {
+        "size": "Free Size",
+        "color": "Brown",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9775129624866-FR-BRO"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773344784674",
+    "product_name": "Zera Mini Dress",
+    "total_inventory": 27,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Gray",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9773344784674-M-GRA"
+      },
+      {
+        "size": "S",
+        "color": "Gray",
+        "quantity": 24,
+        "status": "in_stock",
+        "sku": "9773344784674-S-GRA"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773098959138",
+    "product_name": "Aimme Satin Top",
+    "total_inventory": 42,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Black",
+        "quantity": 28,
+        "status": "in_stock",
+        "sku": "9773098959138-M-BLA"
+      },
+      {
+        "size": "M",
+        "color": "Pink",
+        "quantity": 9,
+        "status": "in_stock",
+        "sku": "9773098959138-M-PIN"
+      },
+      {
+        "size": "S",
+        "color": "Black",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9773098959138-S-BLA"
+      },
+      {
+        "size": "S",
+        "color": "Pink",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9773098959138-S-PIN"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773092208930",
+    "product_name": "The Sparkle",
+    "total_inventory": 32,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Black",
+        "quantity": 7,
+        "status": "in_stock",
+        "sku": "9773092208930-FR-BLA"
+      },
+      {
+        "size": "Free Size",
+        "color": "Gold",
+        "quantity": 25,
+        "status": "in_stock",
+        "sku": "9773092208930-FR-GOL"
+      },
+      {
+        "size": "Free Size",
+        "color": "Silver",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9773092208930-FR-SIL"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9763564912930",
+    "product_name": "Mimi Dress",
+    "total_inventory": 2,
+    "variants": [
+      {
+        "size": "M",
+        "color": "White",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9763564912930-M-WHI"
+      },
+      {
+        "size": "S",
+        "color": "White",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9763564912930-S-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9763139191074",
+    "product_name": "Monica Dress",
+    "total_inventory": 9,
+    "variants": [
+      {
+        "size": "M",
+        "color": "White",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9763139191074-M-WHI"
+      },
+      {
+        "size": "S",
+        "color": "White",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763139191074-S-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9763086663970",
+    "product_name": "Aurelia Heels",
+    "total_inventory": 72,
+    "variants": [
+      {
+        "size": "36",
+        "color": "Black",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9763086663970-36-BLA"
+      },
+      {
+        "size": "36",
+        "color": "Champagne",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763086663970-36-CHA"
+      },
+      {
+        "size": "37",
+        "color": "Black",
+        "quantity": 13,
+        "status": "in_stock",
+        "sku": "9763086663970-37-BLA"
+      },
+      {
+        "size": "37",
+        "color": "Champagne",
+        "quantity": 6,
+        "status": "in_stock",
+        "sku": "9763086663970-37-CHA"
+      },
+      {
+        "size": "38",
+        "color": "Black",
+        "quantity": 5,
+        "status": "in_stock",
+        "sku": "9763086663970-38-BLA"
+      },
+      {
+        "size": "38",
+        "color": "Champagne",
+        "quantity": 9,
+        "status": "in_stock",
+        "sku": "9763086663970-38-CHA"
+      },
+      {
+        "size": "39",
+        "color": "Black",
+        "quantity": 29,
+        "status": "in_stock",
+        "sku": "9763086663970-39-BLA"
+      },
+      {
+        "size": "39",
+        "color": "Champagne",
+        "quantity": 5,
+        "status": "in_stock",
+        "sku": "9763086663970-39-CHA"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9854146412834",
+    "product_name": "Gigi Set",
+    "total_inventory": 14,
+    "variants": [
+      {
+        "size": "L",
+        "color": "Default",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9854146412834-L-DEF"
+      },
+      {
+        "size": "M",
+        "color": "Default",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9854146412834-M-DEF"
+      },
+      {
+        "size": "S",
+        "color": "Default",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9854146412834-S-DEF"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9854144905506",
+    "product_name": "Florina Dress",
+    "total_inventory": 7,
+    "variants": [
+      {
+        "size": "S",
+        "color": "Default",
+        "quantity": 7,
+        "status": "in_stock",
+        "sku": "9854144905506-S-DEF"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9854143136034",
+    "product_name": "Vennesa Dress",
+    "total_inventory": 19,
+    "variants": [
+      {
+        "size": "M",
+        "color": "White",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9854143136034-M-WHI"
+      },
+      {
+        "size": "S",
+        "color": "White",
+        "quantity": 9,
+        "status": "in_stock",
+        "sku": "9854143136034-S-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9854141366562",
+    "product_name": "Yla Dress",
+    "total_inventory": 9,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Default",
+        "quantity": 9,
+        "status": "in_stock",
+        "sku": "9854141366562-M-DEF"
+      },
+      {
+        "size": "S",
+        "color": "Default",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9854141366562-S-DEF"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9817851756834",
+    "product_name": "Noemie Premium Tumbler",
+    "total_inventory": 20,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Beige",
+        "quantity": 6,
+        "status": "in_stock",
+        "sku": "9817851756834-FR-BEI"
+      },
+      {
+        "size": "Free Size",
+        "color": "Pink",
+        "quantity": 14,
+        "status": "in_stock",
+        "sku": "9817851756834-FR-PIN"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9800635351330",
+    "product_name": "Anna Floral Beach Dress",
+    "total_inventory": 6,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Clear",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9800635351330-M-CLE"
+      },
+      {
+        "size": "S",
+        "color": "Clear",
+        "quantity": 5,
+        "status": "in_stock",
+        "sku": "9800635351330-S-CLE"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9800633811234",
+    "product_name": "Aurel Beach Dress",
+    "total_inventory": 16,
+    "variants": [
+      {
+        "size": "M",
+        "color": "White",
+        "quantity": 6,
+        "status": "in_stock",
+        "sku": "9800633811234-M-WHI"
+      },
+      {
+        "size": "S",
+        "color": "White",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9800633811234-S-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9800629813538",
+    "product_name": "Sparkle Mini Dress",
+    "total_inventory": 53,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Silver",
+        "quantity": 25,
+        "status": "in_stock",
+        "sku": "9800629813538-M-SIL"
+      },
+      {
+        "size": "S",
+        "color": "Silver",
+        "quantity": 28,
+        "status": "in_stock",
+        "sku": "9800629813538-S-SIL"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773344096546",
+    "product_name": "Vela Mini Dress",
+    "total_inventory": 8,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Pink",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9773344096546-M-PIN"
+      },
+      {
+        "size": "S",
+        "color": "Pink",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9773344096546-S-PIN"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773309526306",
+    "product_name": "Mini Velora",
+    "total_inventory": 31,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Black",
+        "quantity": 13,
+        "status": "in_stock",
+        "sku": "9773309526306-FR-BLA"
+      },
+      {
+        "size": "Free Size",
+        "color": "White",
+        "quantity": 18,
+        "status": "in_stock",
+        "sku": "9773309526306-FR-WHI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773089653026",
+    "product_name": "The Harper",
+    "total_inventory": 12,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Black",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9773089653026-FR-BLA"
+      },
+      {
+        "size": "Free Size",
+        "color": "Brown",
+        "quantity": 10,
+        "status": "in_stock",
+        "sku": "9773089653026-FR-BRO"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9773087621410",
+    "product_name": "The Elan",
+    "total_inventory": 24,
+    "variants": [
+      {
+        "size": "Free Size",
+        "color": "Beige",
+        "quantity": 4,
+        "status": "in_stock",
+        "sku": "9773087621410-FR-BEI"
+      },
+      {
+        "size": "Free Size",
+        "color": "Black",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9773087621410-FR-BLA"
+      },
+      {
+        "size": "Free Size",
+        "color": "Brown",
+        "quantity": 19,
+        "status": "in_stock",
+        "sku": "9773087621410-FR-BRO"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9769083273506",
+    "product_name": "Nana Dress",
+    "total_inventory": 28,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Beige",
+        "quantity": 25,
+        "status": "in_stock",
+        "sku": "9769083273506-M-BEI"
+      },
+      {
+        "size": "S",
+        "color": "Beige",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9769083273506-S-BEI"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9763568451874",
+    "product_name": "Sierra Satin Maxi Dress",
+    "total_inventory": 38,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Black",
+        "quantity": 28,
+        "status": "in_stock",
+        "sku": "9763568451874-M-BLA"
+      },
+      {
+        "size": "M",
+        "color": "Maroon",
+        "quantity": 7,
+        "status": "in_stock",
+        "sku": "9763568451874-M-MAR"
+      },
+      {
+        "size": "S",
+        "color": "Black",
+        "quantity": 2,
+        "status": "low_stock",
+        "sku": "9763568451874-S-BLA"
+      },
+      {
+        "size": "S",
+        "color": "Maroon",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9763568451874-S-MAR"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9763566158114",
+    "product_name": "Emily Dress",
+    "total_inventory": 8,
+    "variants": [
+      {
+        "size": "M",
+        "color": "Gray",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9763566158114-M-GRA"
+      },
+      {
+        "size": "S",
+        "color": "Gray",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9763566158114-S-GRA"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9762693218594",
+    "product_name": "Ravalle Heels",
+    "total_inventory": 65,
+    "variants": [
+      {
+        "size": "36",
+        "color": "Black",
+        "quantity": 1,
+        "status": "low_stock",
+        "sku": "9762693218594-36-BLA"
+      },
+      {
+        "size": "36",
+        "color": "Nude",
+        "quantity": 8,
+        "status": "in_stock",
+        "sku": "9762693218594-36-NUD"
+      },
+      {
+        "size": "37",
+        "color": "Black",
+        "quantity": 27,
+        "status": "in_stock",
+        "sku": "9762693218594-37-BLA"
+      },
+      {
+        "size": "37",
+        "color": "Nude",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9762693218594-37-NUD"
+      },
+      {
+        "size": "38",
+        "color": "Black",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9762693218594-38-BLA"
+      },
+      {
+        "size": "38",
+        "color": "Nude",
+        "quantity": 3,
+        "status": "low_stock",
+        "sku": "9762693218594-38-NUD"
+      },
+      {
+        "size": "39",
+        "color": "Black",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9762693218594-39-BLA"
+      },
+      {
+        "size": "39",
+        "color": "Nude",
+        "quantity": 23,
+        "status": "in_stock",
+        "sku": "9762693218594-39-NUD"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  },
+  {
+    "product_id": "9945621889314",
+    "product_name": "Angelie Dress",
+    "total_inventory": 0,
+    "variants": [
+      {
+        "size": "Freesize",
+        "color": "Default",
+        "quantity": 0,
+        "status": "out_of_stock",
+        "sku": "9945621889314-FR-DEF"
+      }
+    ],
+    "last_restocked": "2025-12-15T10:00:00+08:00",
+    "last_updated": "2025-12-22T10:00:00+08:00"
+  }
+]

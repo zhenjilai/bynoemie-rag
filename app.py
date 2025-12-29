@@ -1,11 +1,15 @@
 """
-ByNoemie RAG Chatbot - Streamlit Demo App
+ByNoemie RAG Chatbot - Full Featured Assistant
 
-Free deployment on:
-- Streamlit Cloud (recommended)
-- Hugging Face Spaces
-- Railway
-- Render
+Features:
+- LLM-based intent classification with CONTEXT AWARENESS
+- Chat history (persists until user ends conversation)
+- Order management (create, modify, cancel)
+- Stock updates with ChromaDB sync
+- Policy Q&A with RAG
+- Streaming responses
+- Per-response feedback saved to ChromaDB
+- Dark elegant theme
 
 Usage:
     streamlit run app.py
@@ -14,7 +18,11 @@ Usage:
 import os
 import json
 import streamlit as st
-from typing import List, Dict, Any
+import streamlit.components.v1 as components
+from typing import List, Dict, Optional, Tuple
+from datetime import datetime
+import random
+import uuid
 
 # =============================================================================
 # PAGE CONFIG
@@ -23,373 +31,1370 @@ st.set_page_config(
     page_title="ByNoemie Fashion Assistant",
     page_icon="👗",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # =============================================================================
-# LOAD ENVIRONMENT (for cloud deployment)
+# CUSTOM THEME - Dark Elegant
 # =============================================================================
-# Streamlit Cloud: Use st.secrets
-# Other platforms: Use environment variables
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Montserrat:wght@300;400;500&display=swap');
 
-def get_api_key(key_name: str) -> str:
-    """Get API key from secrets or environment"""
-    # Try Streamlit secrets first
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+.stDeployButton {display: none;}
+header {visibility: hidden;}
+
+.stApp {
+    background-color: #1a1a1a;
+}
+
+.main .block-container {
+    padding-top: 2rem;
+    max-width: 1200px;
+}
+
+[data-testid="stChatMessageContent"] {
+    background-color: #2a2a2a !important;
+    border-radius: 12px;
+    color: #f5f5f5;
+}
+
+.stChatInput > div {
+    background-color: #2a2a2a !important;
+    border: 1px solid #3a3a3a !important;
+    border-radius: 25px !important;
+}
+
+.stChatInput input {
+    color: #f5f5f5 !important;
+}
+
+[data-testid="stSidebar"] {
+    background-color: #1a1a1a;
+    border-right: 1px solid #2a2a2a;
+}
+
+[data-testid="stSidebar"] * {
+    color: #f5f5f5 !important;
+}
+
+.stButton > button {
+    background-color: #2a2a2a;
+    color: #d4a5a5;
+    border: 1px solid #d4a5a5;
+    border-radius: 20px;
+    font-family: 'Montserrat', sans-serif;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.85rem;
+}
+
+.stButton > button:hover {
+    background-color: #d4a5a5;
+    color: #1a1a1a;
+}
+
+h1, h2, h3 {
+    font-family: 'Cormorant Garamond', serif !important;
+    color: #f5f5f5 !important;
+}
+
+p, span, div, li {
+    font-family: 'Montserrat', sans-serif;
+}
+
+[data-testid="stMetricValue"] {
+    color: #d4a5a5 !important;
+}
+
+/* Feedback buttons - 10px gap */
+.feedback-container {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.feedback-container .stButton {
+    margin: 0 !important;
+}
+
+.feedback-container .stButton > button {
+    padding: 0.2rem 0.6rem;
+    font-size: 1rem;
+    min-width: 40px;
+    height: 36px;
+}
+
+/* Fix column gaps for feedback buttons */
+[data-testid="column"]:has(.feedback-btn) {
+    padding-right: 10px !important;
+    padding-left: 0 !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 50px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# =============================================================================
+# DATA LOADING
+# =============================================================================
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_products():
+    paths = ["output.json", "data/products/output.json", "data/products/bynoemie_products.json"]
+    for path in paths:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return [p for p in data if not str(p.get('product_id', '')).startswith('prod_') and p.get('product_name')]
+    return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_stock():
+    path = "data/stock/stock_inventory.json"
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return {str(item['product_id']): item for item in data}
+            return data
+    return {}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_images():
+    path = "data/products/bynoemie_products.json"
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return {str(p['product_id']): {
+                'image': p.get('image_url_1', ''),
+                'link': p.get('product_link', '')
+            } for p in data}
+    return {}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_policies():
+    path = "data/policies/policies.json"
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+
+def get_api_key(key: str) -> str:
     try:
-        if hasattr(st, 'secrets') and key_name in st.secrets:
-            return st.secrets[key_name]
+        if hasattr(st, 'secrets') and key in st.secrets:
+            return st.secrets[key]
+    except:
+        pass
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except:
+        pass
+    return os.getenv(key, "")
+
+
+# =============================================================================
+# FEEDBACK SYSTEM - Save to ChromaDB
+# =============================================================================
+def get_feedback_collection():
+    """Get or create feedback ChromaDB collection"""
+    try:
+        import chromadb
+        from chromadb.config import Settings
+        
+        os.makedirs("data/embeddings/chroma_db", exist_ok=True)
+        client = chromadb.PersistentClient(
+            path="data/embeddings/chroma_db",
+            settings=Settings(anonymized_telemetry=False)
+        )
+        return client.get_or_create_collection(
+            name="feedback",
+            metadata={"description": "User feedback on responses"}
+        )
+    except:
+        return None
+
+
+def save_feedback(
+    feedback_type: str,
+    query: str,
+    response: str,
+    product_context: Optional[str] = None,
+    message_id: str = None
+):
+    """Save feedback to ChromaDB and JSON"""
+    feedback_id = message_id or "fb_{}_{}".format(
+        datetime.now().strftime('%Y%m%d%H%M%S'),
+        uuid.uuid4().hex[:6]
+    )
+    
+    feedback_data = {
+        "feedback_id": feedback_id,
+        "type": feedback_type,
+        "query": query,
+        "response": response[:500],
+        "product_context": product_context,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    # Save to ChromaDB
+    collection = get_feedback_collection()
+    if collection:
+        try:
+            doc_text = "Query: {}\nResponse: {}\nFeedback: {}".format(
+                query, response[:300], feedback_type
+            )
+            collection.upsert(
+                ids=[feedback_id],
+                documents=[doc_text],
+                metadatas=[{
+                    "type": feedback_type,
+                    "query": query[:200],
+                    "product_context": product_context or "",
+                    "timestamp": feedback_data["timestamp"]
+                }]
+            )
+        except Exception as e:
+            print("ChromaDB feedback error: {}".format(e))
+    
+    # Also save to JSON
+    try:
+        os.makedirs("data/feedback", exist_ok=True)
+        json_path = "data/feedback/feedback.json"
+        existing = []
+        if os.path.exists(json_path):
+            with open(json_path, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+        existing.append(feedback_data)
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
     except:
         pass
     
-    # Fall back to environment variables
-    return os.getenv(key_name, "")
+    return feedback_id
 
 
 # =============================================================================
-# SAMPLE DATA (for demo without database)
+# ORDER & POLICY MANAGERS
 # =============================================================================
-SAMPLE_PRODUCTS = [
-    {
-        "product_id": "PROD001",
-        "product_name": "Coco Dress",
-        "product_type": "Dress",
-        "product_description": "All eyes on you in the Coco Dress, an ultra-mini silhouette covered in oversized black sequins. Featuring slim straps and a daring open back, it's made for nights that sparkle.",
-        "colors_available": "Black, Gold",
-        "material": "Sequin",
-        "price": 389,
-        "vibe_tags": ["main character energy", "disco diva", "NYE countdown ready", "dance floor queen", "night out", "glamorous", "bold"],
-        "mood_summary": "For the woman who doesn't just enter a room - she commands it."
-    },
-    {
-        "product_id": "PROD002",
-        "product_name": "Tiara Satin Dress",
-        "product_type": "Dress",
-        "product_description": "Feminine with a touch of fantasy. Features a silky draped neckline, sheer embellished bust detail, and open back with gathered straps.",
-        "colors_available": "White, Champagne",
-        "material": "Silk, Satin",
-        "price": 459,
-        "vibe_tags": ["modern fairytale", "romantic dreamer", "ethereal goddess", "bridal shower ready", "soft sensuality", "elegant"],
-        "mood_summary": "Where dreams meet reality in a cascade of silk and light."
-    },
-    {
-        "product_id": "PROD003",
-        "product_name": "Luna Maxi Dress",
-        "product_type": "Dress",
-        "product_description": "Flowing elegance meets modern sophistication. The Luna features a dramatic slit, cinched waist, and delicate shoulder straps.",
-        "colors_available": "Navy, Burgundy",
-        "material": "Chiffon",
-        "price": 529,
-        "vibe_tags": ["gala ready", "timeless elegance", "red carpet moment", "sophisticated", "romantic dinner", "luxurious"],
-        "mood_summary": "For moments that deserve to be remembered forever."
-    },
-    {
-        "product_id": "PROD004",
-        "product_name": "Stella Jumpsuit",
-        "product_type": "Jumpsuit",
-        "product_description": "Bold and contemporary. The Stella jumpsuit features a plunging neckline, wide-leg silhouette, and statement belt.",
-        "colors_available": "Black, Red",
-        "material": "Crepe",
-        "price": 479,
-        "vibe_tags": ["power move", "boss babe energy", "modern elegance", "confident", "cocktail event", "statement piece"],
-        "mood_summary": "For the woman who leads, not follows."
-    },
-    {
-        "product_id": "PROD005",
-        "product_name": "Aria Midi Dress",
-        "product_type": "Dress",
-        "product_description": "Effortlessly chic for day or night. The Aria features a flattering wrap design, flutter sleeves, and a midi length.",
-        "colors_available": "Sage Green, Dusty Pink",
-        "material": "Cotton Blend",
-        "price": 299,
-        "vibe_tags": ["effortlessly chic", "garden party", "brunch ready", "feminine", "day to night", "versatile"],
-        "mood_summary": "Easy elegance for every occasion."
-    },
-    {
-        "product_id": "PROD006",
-        "product_name": "Eva Slip Dress",
-        "product_type": "Dress",
-        "product_description": "Understated luxury. The Eva features a cowl neckline, adjustable straps, and bias-cut silhouette that flatters every figure.",
-        "colors_available": "Black, Champagne",
-        "material": "Silk",
-        "price": 379,
-        "vibe_tags": ["quiet luxury", "date night", "sensual", "minimalist", "elegant", "timeless"],
-        "mood_summary": "Less is more, but make it luxurious."
-    },
-    {
-        "product_id": "PROD007",
-        "product_name": "Bella Off-Shoulder Dress",
-        "product_type": "Dress",
-        "product_description": "Romantic and feminine. The Bella features a dramatic off-shoulder neckline, fitted bodice, and flowy skirt.",
-        "colors_available": "White, Blush Pink",
-        "material": "Lace",
-        "price": 419,
-        "vibe_tags": ["wedding guest", "romantic", "feminine", "garden party", "summer elegance", "dreamy"],
-        "mood_summary": "For the romantic at heart."
-    },
-    {
-        "product_id": "PROD008",
-        "product_name": "Jade Cocktail Dress",
-        "product_type": "Dress",
-        "product_description": "A modern take on the classic cocktail dress. Features asymmetric hemline, one-shoulder design, and sculpted bodice.",
-        "colors_available": "Emerald, Black",
-        "material": "Jersey",
-        "price": 349,
-        "vibe_tags": ["cocktail hour", "modern classic", "sophisticated", "figure flattering", "night out", "chic"],
-        "mood_summary": "Classic silhouette, modern attitude."
-    },
-]
+def get_order_manager():
+    if 'order_manager' not in st.session_state:
+        try:
+            from src.orders import OrderManager
+            st.session_state.order_manager = OrderManager()
+        except ImportError as e:
+            st.session_state.order_manager = None
+    return st.session_state.order_manager
+
+
+def get_policy_rag():
+    if 'policy_rag' not in st.session_state:
+        try:
+            from src.policy_rag import PolicyRAG
+            st.session_state.policy_rag = PolicyRAG()
+        except ImportError as e:
+            st.session_state.policy_rag = None
+    return st.session_state.policy_rag
+
+
+def reload_stock():
+    load_stock.clear()
+    return load_stock()
 
 
 # =============================================================================
-# SIMPLE SEARCH (no vector DB needed for demo)
+# LLM FUNCTIONS - ALL OPENAI (except vibe generation)
 # =============================================================================
-def search_products(query: str, products: List[Dict]) -> List[Dict]:
-    """Simple keyword + vibe search for demo"""
-    query_lower = query.lower()
-    query_words = set(query_lower.split())
-    
-    scored_products = []
-    
-    for product in products:
-        score = 0
-        
-        # Check product name
-        if query_lower in product["product_name"].lower():
-            score += 10
-        
-        # Check description
-        desc_lower = product["product_description"].lower()
-        for word in query_words:
-            if word in desc_lower:
-                score += 2
-        
-        # Check vibe tags (most important for this demo!)
-        for vibe in product["vibe_tags"]:
-            vibe_lower = vibe.lower()
-            if query_lower in vibe_lower:
-                score += 8
-            for word in query_words:
-                if word in vibe_lower:
-                    score += 3
-        
-        # Check mood summary
-        if query_lower in product.get("mood_summary", "").lower():
-            score += 5
-        
-        # Check colors
-        if query_lower in product["colors_available"].lower():
-            score += 4
-        
-        # Check material
-        if query_lower in product["material"].lower():
-            score += 3
-        
-        if score > 0:
-            scored_products.append((score, product))
-    
-    # Sort by score and return top results
-    scored_products.sort(key=lambda x: x[0], reverse=True)
-    return [p for _, p in scored_products[:5]]
-
-
-# =============================================================================
-# LLM CHAT (optional - uses Groq if available)
-# =============================================================================
-def get_llm_response(query: str, products: List[Dict]) -> str:
-    """Get LLM response using Groq (free tier)"""
-    api_key = get_api_key("GROQ_API_KEY")
-    
+def get_openai_client():
+    """Get OpenAI client for all LLM tasks"""
+    api_key = get_api_key("OPENAI_API_KEY")
     if not api_key:
         return None
+    try:
+        from openai import OpenAI
+        return OpenAI(api_key=api_key)
+    except:
+        return None
+
+
+def llm_classify_intent(
+    query: str, 
+    product_names: List[str],
+    chat_history: List[Dict] = None,
+    current_product: Optional[str] = None
+) -> Dict:
+    """
+    Use OpenAI to classify intent WITH FULL CHAT HISTORY.
+    Passes entire conversation context for accurate understanding.
+    """
+    client = get_openai_client()
+    
+    if not client:
+        return fallback_classify(query, product_names, current_product)
+    
+    # Build system prompt
+    system_prompt = """You are an intent classifier for ByNoemie fashion boutique chatbot.
+
+You will receive the FULL CONVERSATION HISTORY. Use it to understand context.
+If user says "this", "it", "that", "the item" - identify which product they're referring to from the conversation.
+
+IMPORTANT: This is a FASHION BOUTIQUE chatbot. It should ONLY answer questions about:
+- Products (dresses, jumpsuits, heels, bags, etc.)
+- Stock availability
+- Prices
+- Store policies (shipping, refund, terms)
+- Fashion recommendations
+- Orders
+
+ANY question NOT related to fashion/products/store should be classified as OFF_TOPIC, including:
+- Politics, celebrities, news
+- General knowledge questions
+- Weather, sports, entertainment
+- Personal questions not about shopping
+- Technical questions unrelated to shopping
+
+INTENTS:
+- GREETING: Hello, hi, hey
+- RECOMMENDATION: Show me, recommend, suggest, looking for, outfit for occasion, show me shoes/dresses/bags, what heels do you have, browse category, "all dresses", "your shoes"
+- STOCK_CHECK: In stock, available, sizes, do you have, stock for this/it
+- PRODUCT_INFO: Tell me about, what is, describe (ONLY for products)
+- PRICE_CHECK: How much, price, cost (ONLY for products)
+- POLICY_QUESTION: Returns, refunds, shipping, terms, exchange, delivery time
+- ORDER_CREATE: Order, buy, purchase, add to cart
+- ORDER_CANCEL: Cancel order
+- END_CONVERSATION: Goodbye, bye, end chat
+- THANKS: Thank you
+- OFF_TOPIC: ANY question not related to fashion, products, or store operations
+- GENERAL: Other fashion-related questions
+
+IMPORTANT RULE: If user asks to SEE or SHOW products from a category (shoes, dresses, heels, bags, etc.), ALWAYS classify as RECOMMENDATION. Do NOT ask for clarification - show the products first.
+
+Examples:
+- "show me all shoes" -> RECOMMENDATION
+- "what heels do you have" -> RECOMMENDATION
+- "I want to see dresses" -> RECOMMENDATION
+- "show me bags" -> RECOMMENDATION
+
+AVAILABLE PRODUCTS: {}
+
+Analyze the conversation and return ONLY JSON:
+{{"intent": "INTENT_NAME", "product_mentioned": "exact product name from conversation or null", "size": "size if mentioned or null", "color": "color if mentioned or null"}}""".format(', '.join(product_names[:20]))
+
+    # Build messages with full chat history
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Add chat history for context (last 10 messages max)
+    if chat_history:
+        recent_history = chat_history[-10:]
+        for msg in recent_history:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if content:
+                messages.append({"role": role, "content": content[:500]})
+    
+    # Add current query
+    messages.append({"role": "user", "content": "Classify this query: {}".format(query)})
     
     try:
-        from groq import Groq
-        
-        client = Groq(api_key=api_key)
-        
-        # Build context from products
-        context = "\n\n".join([
-            f"**{p['product_name']}** (MYR {p['price']})\n"
-            f"Type: {p['product_type']}\n"
-            f"Colors: {p['colors_available']}\n"
-            f"Vibes: {', '.join(p['vibe_tags'][:5])}\n"
-            f"Description: {p['product_description'][:200]}"
-            for p in products[:3]
-        ])
-        
         response = client.chat.completions.create(
-            model="llama-3.1-70b-versatile",
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are a friendly fashion assistant for ByNoemie, a luxury women's boutique in Malaysia.
-Help customers find the perfect outfit. Be warm, helpful, and enthusiastic about fashion.
-Keep responses concise (2-3 sentences). Always mention specific products from the context."""
-                },
-                {
-                    "role": "user",
-                    "content": f"Customer query: {query}\n\nAvailable products:\n{context}\n\nRecommend the best option(s):"
-                }
-            ],
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=150,
+            temperature=0.1
+        )
+        
+        result = response.choices[0].message.content
+        import re
+        json_match = re.search(r'\{.*\}', result, re.DOTALL)
+        if json_match:
+            parsed = json.loads(json_match.group())
+            return parsed
+        return {"intent": "GENERAL"}
+    except Exception as e:
+        print("OpenAI classification error: {}".format(e))
+        return fallback_classify(query, product_names, current_product)
+
+
+def fallback_classify(query: str, product_names: List[str], current_product: Optional[str] = None) -> Dict:
+    """Fallback keyword-based classification with context"""
+    q = query.lower().strip()
+    
+    # Check for references to current product
+    ref_words = ['this', 'it', 'that', 'the item', 'same', 'above']
+    refers_to_current = any(word in q for word in ref_words)
+    
+    # Find product mention
+    product_mentioned = None
+    for name in product_names:
+        if name.lower() in q:
+            product_mentioned = name
+            break
+    
+    # If referring to current product
+    if not product_mentioned and refers_to_current and current_product:
+        product_mentioned = current_product
+    
+    # Extract size
+    size = None
+    size_map = {
+        'xs': 'XS', 'extra small': 'XS',
+        's size': 'S', 'size s': 'S', 'small': 'S',
+        'm size': 'M', 'size m': 'M', 'medium': 'M',
+        'l size': 'L', 'size l': 'L', 'large': 'L',
+        'xl': 'XL', 'extra large': 'XL',
+        'free size': 'Free Size'
+    }
+    for pattern, sz in size_map.items():
+        if pattern in q:
+            size = sz
+            break
+    
+    # Extract color
+    color = None
+    colors = ['black', 'white', 'beige', 'red', 'blue', 'pink', 'green', 'brown', 'cream', 'navy', 'gold']
+    for c in colors:
+        if c in q:
+            color = c.capitalize()
+            break
+    
+    result = {"product_mentioned": product_mentioned, "size": size, "color": color}
+    
+    # Fashion/store related keywords
+    fashion_keywords = [
+        'dress', 'jumpsuit', 'top', 'skirt', 'pants', 'heel', 'bag', 'outfit', 'wear',
+        'stock', 'available', 'size', 'price', 'cost', 'order', 'buy', 'purchase',
+        'ship', 'delivery', 'refund', 'return', 'exchange', 'policy',
+        'recommend', 'suggest', 'show', 'looking for', 'style', 'fashion',
+        'wedding', 'party', 'dinner', 'date', 'occasion', 'formal', 'casual',
+        'romantic', 'elegant', 'chic', 'color', 'fabric', 'material',
+        'shoes', 'shoe', 'footwear', 'sandal', 'purse', 'clutch', 'sets', 'set'
+    ]
+    
+    # Broad category keywords that should trigger RECOMMENDATION
+    category_keywords = [
+        'shoes', 'shoe', 'heels', 'heel', 'footwear', 'sandal', 'sandals',
+        'bags', 'bag', 'purse', 'clutch', 'handbag',
+        'dresses', 'dress', 'gown',
+        'jumpsuits', 'jumpsuit', 'romper',
+        'tops', 'top', 'blouse',
+        'sets', 'set', 'co-ord'
+    ]
+    
+    # Check if query is fashion-related
+    is_fashion_related = any(kw in q for kw in fashion_keywords) or product_mentioned
+    
+    # Check if query is asking for a category
+    is_category_query = any(cat in q for cat in category_keywords)
+    
+    # Determine intent
+    if any(g in q for g in ['bye', 'goodbye', 'end chat']):
+        result["intent"] = "END_CONVERSATION"
+    elif any(g in q for g in ['hello', 'hi', 'hey']):
+        result["intent"] = "GREETING"
+    elif any(p in q for p in ['return', 'refund', 'exchange', 'shipping', 'policy', 'delivery', 'how long']):
+        result["intent"] = "POLICY_QUESTION"
+    elif any(s in q for s in ['in stock', 'available', 'do you have']) and not is_category_query:
+        result["intent"] = "STOCK_CHECK"
+    elif 'cancel' in q and 'order' in q:
+        result["intent"] = "ORDER_CANCEL"
+    elif any(o in q for o in ['order', 'buy', 'purchase']) and not is_category_query:
+        result["intent"] = "ORDER_CREATE"
+    elif any(p in q for p in ['how much', 'price', 'cost']) and is_fashion_related:
+        result["intent"] = "PRICE_CHECK"
+    elif any(i in q for i in ['tell me about', 'what is', 'describe']) and product_mentioned:
+        result["intent"] = "PRODUCT_INFO"
+    elif is_category_query or any(r in q for r in ['recommend', 'suggest', 'show me', 'looking for', 'show', 'what do you have', 'browse']):
+        # Category queries and recommendation requests go to RECOMMENDATION
+        result["intent"] = "RECOMMENDATION"
+    elif any(t in q for t in ['thank', 'thanks']):
+        result["intent"] = "THANKS"
+    elif not is_fashion_related:
+        # If not fashion related, mark as OFF_TOPIC
+        result["intent"] = "OFF_TOPIC"
+    else:
+        result["intent"] = "GENERAL"
+    
+    return result
+
+
+def stream_response(client, messages, placeholder):
+    """Stream response using OpenAI"""
+    try:
+        stream = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=300,
+            temperature=0.7,
+            stream=True
+        )
+        
+        full_response = ""
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                full_response += chunk.choices[0].delta.content
+                placeholder.markdown(full_response + "▌")
+        
+        placeholder.markdown(full_response)
+        return full_response
+    except Exception as e:
+        print("OpenAI streaming error: {}".format(e))
+        return None
+
+
+def llm_generate_response(query: str, intent: str, context: str, use_stream: bool = True) -> str:
+    """Generate response using OpenAI"""
+    client = get_openai_client()
+    if not client:
+        return None
+    
+    prompts = {
+        "GREETING": "You're a warm fashion assistant for ByNoemie. Brief welcoming greeting.",
+        "RECOMMENDATION": "Fashion stylist. SHORT recommendations (2-3 sentences). Mention product names.",
+        "STOCK_CHECK": "Provide stock information clearly and professionally.",
+        "PRODUCT_INFO": "Describe the product elegantly in 2-3 sentences.",
+        "PRICE_CHECK": "State the price clearly.",
+        "POLICY_QUESTION": "Answer the policy question helpfully.",
+        "ORDER_CREATE": "Confirm order details professionally.",
+        "END_CONVERSATION": "Gracious farewell, thank them.",
+        "THANKS": "Respond warmly.",
+        "GENERAL": "Be helpful and professional."
+    }
+    
+    messages = [
+        {"role": "system", "content": prompts.get(intent, prompts["GENERAL"])},
+        {"role": "user", "content": "Query: {}\n\nContext: {}".format(query, context)}
+    ]
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
             max_tokens=300,
             temperature=0.7
         )
-        
         return response.choices[0].message.content
-        
     except Exception as e:
-        st.error(f"LLM error: {e}")
+        print("OpenAI response error: {}".format(e))
         return None
 
 
 # =============================================================================
-# UI COMPONENTS
+# SEARCH & DATA FUNCTIONS
 # =============================================================================
-def display_product_card(product: Dict):
-    """Display a product card"""
-    with st.container():
-        col1, col2 = st.columns([1, 2])
+def llm_understand_query(query: str, client) -> Dict:
+    """
+    Use LLM to understand what the user is looking for.
+    Returns structured info about category, style, occasion, etc.
+    """
+    if not client:
+        return {}
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """Extract shopping intent from the query. Return JSON only:
+{
+    "category": "Clothing/Footwear/Accessories or null",
+    "subcategory": "Dress/Heel/Bag/Top/Jumpsuit or null",
+    "product_types": ["Maxi Dress", "Stiletto Heel", etc. or empty],
+    "occasion": "party/wedding/dinner/casual/work or null",
+    "style": "romantic/elegant/chic/bold or null",
+    "color": "black/white/red or null",
+    "material": "silk/leather/sequin or null",
+    "keywords": ["additional", "search", "terms"]
+}
+
+Examples:
+- "show me shoes" → {"category": "Footwear", "subcategory": "Heel", "product_types": ["Heel", "Sandal"]}
+- "party dresses" → {"category": "Clothing", "subcategory": "Dress", "occasion": "party"}
+- "silk dress" → {"category": "Clothing", "subcategory": "Dress", "material": "silk"}
+- "bling bling heels" → {"category": "Footwear", "material": "sequin", "keywords": ["embellishment"]}"""
+                },
+                {"role": "user", "content": query}
+            ],
+            max_tokens=200,
+            temperature=0.1
+        )
         
-        with col1:
-            # Placeholder image
-            st.image(
-                f"https://via.placeholder.com/200x250/f0e6e6/333333?text={product['product_name'].replace(' ', '+')}",
-                use_container_width=True
+        result = response.choices[0].message.content
+        import re
+        json_match = re.search(r'\{.*\}', result, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+    except Exception as e:
+        print("Query understanding error: {}".format(e))
+    return {}
+
+
+def search_products(query: str, products: List[Dict], n: int = 8, query_understanding: Dict = None) -> List[Dict]:
+    """
+    Search products with enhanced metadata support.
+    Uses category, subcategory, materials, vibes, occasions, etc.
+    """
+    if not query or len(query.strip()) < 2:
+        return []
+    
+    q = query.lower()
+    
+    # === SYNONYM MAPPING ===
+    SYNONYMS = {
+        "shoes": ["heel", "heels", "sandal", "sandals", "footwear", "pumps"],
+        "shoe": ["heel", "heels", "sandal", "sandals", "footwear", "pumps"],
+        "footwear": ["heel", "heels", "sandal", "sandals"],
+        "bags": ["bag", "clutch", "purse", "handbag", "tote"],
+        "bag": ["clutch", "purse", "handbag", "tote"],
+        "purse": ["bag", "clutch", "handbag"],
+        "tops": ["top", "blouse", "shirt", "camisole"],
+        "top": ["blouse", "shirt", "camisole"],
+        "pants": ["trouser", "trousers", "slacks"],
+        "bottoms": ["pants", "skirt", "shorts", "trouser"],
+        "dresses": ["dress", "gown", "maxi", "mini"],
+        "gown": ["dress", "evening dress", "formal dress"],
+        "jumpsuits": ["jumpsuit", "romper", "playsuit"],
+        "sparkly": ["sequin", "glitter", "rhinestone", "crystal", "bling"],
+        "bling": ["sequin", "glitter", "rhinestone", "crystal", "embellishment"],
+        "shiny": ["sequin", "satin", "silk", "metallic"],
+    }
+    
+    # === CATEGORY MAPPING ===
+    CATEGORY_MAP = {
+        "shoes": {"category": "Footwear", "subcategories": ["Heel", "Sandal"]},
+        "shoe": {"category": "Footwear", "subcategories": ["Heel", "Sandal"]},
+        "heels": {"category": "Footwear", "subcategories": ["Heel"]},
+        "heel": {"category": "Footwear", "subcategories": ["Heel"]},
+        "sandals": {"category": "Footwear", "subcategories": ["Sandal"]},
+        "footwear": {"category": "Footwear", "subcategories": ["Heel", "Sandal"]},
+        "bags": {"category": "Accessories", "subcategories": ["Bag", "Clutch", "Handbag"]},
+        "bag": {"category": "Accessories", "subcategories": ["Bag", "Clutch", "Handbag"]},
+        "purse": {"category": "Accessories", "subcategories": ["Bag", "Clutch", "Handbag"]},
+        "clutch": {"category": "Accessories", "subcategories": ["Clutch"]},
+        "dresses": {"category": "Clothing", "subcategories": ["Dress"]},
+        "dress": {"category": "Clothing", "subcategories": ["Dress"]},
+        "jumpsuits": {"category": "Clothing", "subcategories": ["Jumpsuit"]},
+        "jumpsuit": {"category": "Clothing", "subcategories": ["Jumpsuit"]},
+        "tops": {"category": "Clothing", "subcategories": ["Top", "Blouse"]},
+        "top": {"category": "Clothing", "subcategories": ["Top", "Blouse"]},
+        "sets": {"category": "Clothing", "subcategories": ["Set", "Co-ord"]},
+        "set": {"category": "Clothing", "subcategories": ["Set", "Co-ord"]},
+    }
+    
+    # === MATERIAL KEYWORDS ===
+    MATERIAL_KEYWORDS = {
+        "silk": ["silk", "satin", "silky"],
+        "leather": ["leather", "faux leather", "pu leather"],
+        "sequin": ["sequin", "glitter", "sparkle", "bling", "rhinestone", "crystal", "beaded"],
+        "lace": ["lace", "lacey"],
+        "velvet": ["velvet", "velour"],
+        "cotton": ["cotton", "linen"],
+        "chiffon": ["chiffon", "sheer", "mesh"],
+    }
+    
+    # Extract from LLM understanding
+    target_category = None
+    target_subcategories = []
+    target_materials = []
+    target_occasions = []
+    target_vibes = []
+    extra_keywords = []
+    
+    if query_understanding:
+        target_category = query_understanding.get('category')
+        if query_understanding.get('subcategory'):
+            target_subcategories.append(query_understanding['subcategory'])
+        if query_understanding.get('product_types'):
+            target_subcategories.extend(query_understanding['product_types'])
+        if query_understanding.get('material'):
+            target_materials.append(query_understanding['material'])
+        if query_understanding.get('occasion'):
+            target_occasions.append(query_understanding['occasion'])
+        if query_understanding.get('style'):
+            target_vibes.append(query_understanding['style'])
+        if query_understanding.get('keywords'):
+            extra_keywords.extend(query_understanding['keywords'])
+    
+    # Expand query with synonyms
+    words = [w for w in q.split() if len(w) >= 2]
+    expanded_words = list(words) + extra_keywords
+    
+    for word in words:
+        # Add synonyms
+        if word in SYNONYMS:
+            expanded_words.extend(SYNONYMS[word])
+        
+        # Detect category from keywords
+        if word in CATEGORY_MAP and not target_category:
+            target_category = CATEGORY_MAP[word]["category"]
+            target_subcategories.extend(CATEGORY_MAP[word]["subcategories"])
+        
+        # Detect materials from keywords
+        for material, keywords in MATERIAL_KEYWORDS.items():
+            if word in keywords:
+                target_materials.append(material)
+    
+    # Remove duplicates
+    expanded_words = list(set(expanded_words))
+    target_subcategories = list(set(target_subcategories))
+    target_materials = list(set(target_materials))
+    
+    # === STRICT CATEGORY FILTERING ===
+    # When user asks for a specific category (shoes, bags, dresses), ONLY show that category
+    strict_category_mode = False
+    category_keywords_in_query = ['shoes', 'shoe', 'heels', 'heel', 'sandals', 'footwear', 
+                                   'bags', 'bag', 'purse', 'clutch', 'handbag',
+                                   'dresses', 'dress', 'gown', 'jumpsuits', 'jumpsuit',
+                                   'tops', 'top', 'blouse', 'sets', 'set']
+    
+    for kw in category_keywords_in_query:
+        if kw in q:
+            strict_category_mode = True
+            break
+    
+    # === FILTER PRODUCTS ===
+    filtered_products = products
+    
+    # Filter by category (STRICT when category explicitly requested)
+    if target_category:
+        category_filtered = []
+        for p in products:
+            # Check category field
+            if p.get('category', '').lower() == target_category.lower():
+                category_filtered.append(p)
+            # Fallback: check product_type for category indication
+            elif not p.get('category'):
+                ptype = p.get('product_type', '').lower()
+                if target_category == "Footwear" and any(ft in ptype for ft in ['heel', 'sandal', 'shoe', 'pump', 'mule']):
+                    category_filtered.append(p)
+                elif target_category == "Accessories" and any(acc in ptype for acc in ['bag', 'clutch', 'purse', 'handbag', 'tote']):
+                    category_filtered.append(p)
+                elif target_category == "Clothing" and any(cl in ptype for cl in ['dress', 'jumpsuit', 'top', 'blouse', 'set', 'skirt']):
+                    category_filtered.append(p)
+        
+        if category_filtered:
+            filtered_products = category_filtered
+        elif strict_category_mode:
+            # If strict mode and no matches, return empty rather than unrelated products
+            return []
+    
+    # Filter by subcategory
+    if target_subcategories:
+        subcat_filtered = [
+            p for p in filtered_products 
+            if any(
+                sc.lower() in p.get('subcategory', '').lower() or
+                sc.lower() in p.get('product_type', '').lower()
+                for sc in target_subcategories
             )
+        ]
+        if subcat_filtered:
+            filtered_products = subcat_filtered
+    
+    # Filter by material
+    if target_materials:
+        material_filtered = [
+            p for p in filtered_products
+            if any(
+                mat.lower() in ' '.join(p.get('materials', [])).lower() or
+                (mat == 'sequin' and p.get('has_embellishment', False))
+                for mat in target_materials
+            )
+        ]
+        if material_filtered:
+            filtered_products = material_filtered
+    
+    # === SCORE PRODUCTS ===
+    scored = []
+    for p in filtered_products:
+        score = 0
         
-        with col2:
-            st.markdown(f"### {product['product_name']}")
-            st.markdown(f"**MYR {product['price']}** | {product['product_type']}")
-            st.markdown(f"*{product['mood_summary']}*")
-            st.markdown(f"**Colors:** {product['colors_available']}")
-            st.markdown(f"**Material:** {product['material']}")
+        # Text fields to search
+        name = p.get('product_name', '').lower()
+        ptype = p.get('product_type', '').lower()
+        subcat = p.get('subcategory', '').lower()
+        vibes = ' '.join(p.get('vibe_tags', [])).lower()
+        mood = p.get('mood_summary', '').lower()
+        ideal = p.get('ideal_for', '').lower()
+        materials = ' '.join(p.get('materials', [])).lower()
+        occasions = ' '.join(p.get('occasions', [])).lower()
+        colors = ' '.join(p.get('colors', [])).lower()
+        
+        for w in expanded_words:
+            w = w.lower()
+            if w in name: score += 20
+            if w in subcat: score += 18
+            if w in ptype: score += 15
+            if w in materials: score += 15
+            if w in vibes: score += 12
+            if w in occasions: score += 10
+            if w in mood: score += 8
+            if w in ideal: score += 8
+            if w in colors: score += 5
+        
+        # Boost for category/subcategory match
+        if target_category and p.get('category', '').lower() == target_category.lower():
+            score += 25
+        if target_subcategories:
+            for sc in target_subcategories:
+                if sc.lower() in subcat or sc.lower() in ptype:
+                    score += 30
+        
+        # Boost for material match
+        if target_materials:
+            for mat in target_materials:
+                if mat.lower() in materials:
+                    score += 20
+                if mat == 'sequin' and p.get('has_embellishment'):
+                    score += 20
+        
+        # Boost for occasion match
+        if target_occasions:
+            for occ in target_occasions:
+                if occ.lower() in occasions or occ.lower() in ideal:
+                    score += 15
+        
+        # In strict category mode, include all filtered products (even with score 0)
+        # In non-strict mode, only include if score > 0
+        if strict_category_mode:
+            # Give minimum score of 1 so all filtered products are included
+            scored.append((p, max(score, 1)))
+        elif score > 0:
+            scored.append((p, score))
+    
+    # If no scored matches but we have filtered products, return them
+    if not scored and filtered_products and (target_category or target_subcategories):
+        return filtered_products[:n]
+    
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [p[0] for p in scored[:n]]
+
+
+def find_product(name: str, products: List[Dict]) -> Optional[Dict]:
+    if not name:
+        return None
+    name_lower = name.lower()
+    for p in products:
+        if name_lower in p.get('product_name', '').lower():
+            return p
+    return None
+
+
+def get_stock_info(product: Dict, stock_data: Dict, size: str = None, color: str = None) -> str:
+    """Get stock info, optionally for specific size/color"""
+    pid = str(product.get('product_id', ''))
+    name = product.get('product_name', '')
+    
+    if pid not in stock_data:
+        return "Please contact us for availability of {}.".format(name)
+    
+    stock = stock_data[pid]
+    variants = stock.get('variants', [])
+    
+    # If specific size/color requested
+    if size or color:
+        for v in variants:
+            v_size = v.get('size', '').upper()
+            v_color = v.get('color', '').lower()
             
-            # Vibe tags as badges
-            vibes_html = " ".join([
-                f'<span style="background-color: #f8e1e7; color: #8b4557; padding: 2px 8px; border-radius: 12px; margin: 2px; display: inline-block; font-size: 0.8em;">{vibe}</span>'
-                for vibe in product['vibe_tags'][:5]
-            ])
-            st.markdown(f"**Vibes:** {vibes_html}", unsafe_allow_html=True)
+            size_match = not size or size.upper() in v_size or v_size in size.upper()
+            color_match = not color or color.lower() in v_color or v_color in color.lower()
+            
+            if size_match and color_match:
+                qty = v.get('quantity', 0)
+                if qty > 0:
+                    return "✅ Yes! **{}** in **{}/{}** is available with **{}** in stock.".format(
+                        name, v['size'], v['color'], qty
+                    )
+                else:
+                    return "❌ Sorry, **{}** in **{}/{}** is currently out of stock.".format(
+                        name, v['size'], v['color']
+                    )
         
-        st.divider()
+        return "Sorry, I couldn't find {} in that specific size/color combination.".format(name)
+    
+    # General stock check
+    total = stock.get('total_inventory', 0)
+    if total == 0:
+        return "Sorry, **{}** is currently out of stock.".format(name)
+    
+    available = []
+    for v in variants:
+        if v.get('quantity', 0) > 0:
+            available.append("• {}/{}: {} available".format(v['size'], v['color'], v['quantity']))
+    
+    return "**{}** is in stock!\n\nAvailable:\n{}".format(name, '\n'.join(available[:8]))
+
+
+def get_policy_answer(query: str, policies: List[Dict]) -> Tuple[str, List[Dict]]:
+    policy_rag = get_policy_rag()
+    
+    if policy_rag:
+        openai_client = get_openai_client()
+        answer, sections = policy_rag.answer_policy_question(query, openai_client)
+        return answer, sections
+    
+    # Fallback
+    q = query.lower()
+    if any(w in q for w in ['refund', 'return', 'exchange']):
+        policy_type = 'refund_policy'
+    elif any(w in q for w in ['ship', 'delivery']):
+        policy_type = 'shipping_policy'
+    else:
+        policy_type = 'terms_of_service'
+    
+    for policy in policies:
+        if policy.get('policy_id') == policy_type:
+            return "**{}**\n\n{}...".format(policy['policy_name'], policy['content'][:1500]), []
+    
+    return "Please contact hello@bynoemie.com for policy questions.", []
+
+
+# =============================================================================
+# PRODUCT DISPLAY
+# =============================================================================
+def render_products_html(products: List[Dict], stock_data: Dict, images_data: Dict) -> str:
+    cards = ""
+    
+    for p in products:
+        pid = str(p.get('product_id', ''))
+        name = p.get('product_name', 'Unknown')
+        price = p.get('price_min', 0)
+        currency = p.get('price_currency', 'MYR')
+        ptype = p.get('product_type', '')
+        vibes = p.get('vibe_tags', [])[:2]
+        
+        img_data = images_data.get(pid, {})
+        img = img_data.get('image', '') or p.get('image_url_1', '')
+        link = img_data.get('link', '') or p.get('product_link', '#')
+        
+        if not img:
+            img = "https://via.placeholder.com/280x350/2a2a2a/d4a5a5?text={}".format(name[:10].replace(' ', '+'))
+        
+        stock_info = stock_data.get(pid, {})
+        total = stock_info.get('total_inventory', 10)
+        if total == 0:
+            stock_html = '<span style="color:#e57373;">Sold Out</span>'
+        elif total <= 5:
+            stock_html = '<span style="color:#ffb74d;">Only {} left</span>'.format(total)
+        else:
+            stock_html = '<span style="color:#81c784;">In Stock</span>'
+        
+        vibes_html = ''.join(['<span style="background:rgba(212,165,165,0.2);color:#d4a5a5;padding:4px 10px;border-radius:15px;font-size:10px;margin-right:4px;">{}</span>'.format(v) for v in vibes])
+        
+        cards += '''
+        <a href="{link}" target="_blank" style="text-decoration:none;">
+            <div style="min-width:200px;max-width:200px;background:#2a2a2a;border-radius:12px;overflow:hidden;flex-shrink:0;margin-right:16px;transition:transform 0.3s;cursor:pointer;"
+                 onmouseover="this.style.transform='translateY(-5px)'" 
+                 onmouseout="this.style.transform='translateY(0)'">
+                <img src="{img}" style="width:100%;height:250px;object-fit:cover;" 
+                     onerror="this.src='https://via.placeholder.com/280x350/2a2a2a/d4a5a5?text=No+Image'">
+                <div style="padding:12px;">
+                    <div style="font-family:'Cormorant Garamond',serif;font-size:15px;font-weight:500;color:#f5f5f5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{name}</div>
+                    <div style="color:#d4a5a5;font-weight:500;font-size:14px;margin:4px 0;">{currency} {price:.0f}</div>
+                    <div style="color:#888;font-size:11px;margin-bottom:8px;">{ptype}</div>
+                    <div style="margin-bottom:8px;">{vibes_html}</div>
+                    <div style="font-size:11px;">{stock_html}</div>
+                </div>
+            </div>
+        </a>'''.format(link=link, img=img, name=name, currency=currency, price=price, ptype=ptype, vibes_html=vibes_html, stock_html=stock_html)
+    
+    return '<div style="display:flex;overflow-x:auto;padding:16px 0;">{}</div>'.format(cards)
+
+
+def display_products(products: List[Dict], stock_data: Dict, images_data: Dict, key: str):
+    if not products:
+        return
+    html = render_products_html(products, stock_data, images_data)
+    components.html(html, height=420, scrolling=True)
+
+
+def display_feedback_buttons(key: str, query: str, response: str, product_context: str = None):
+    """Display compact feedback buttons with 10px gap"""
+    # Use custom HTML container for precise 10px gap
+    st.markdown("""
+    <style>
+    .fb-row-{} {{
+        display: flex;
+        gap: 10px;
+        margin-top: 5px;
+    }}
+    </style>
+    """.format(key), unsafe_allow_html=True)
+    
+    # Create columns with minimal width
+    col1, col2, col3, spacer = st.columns([0.08, 0.08, 0.08, 0.76])
+    
+    with col1:
+        if st.button("👍", key="pos_{}".format(key), help="Helpful"):
+            save_feedback("positive", query, response, product_context)
+            st.toast("Thank you! 💕")
+    
+    with col2:
+        if st.button("👎", key="neg_{}".format(key), help="Not helpful"):
+            save_feedback("negative", query, response, product_context)
+            st.toast("We'll improve!")
+    
+    with col3:
+        if st.button("😐", key="neu_{}".format(key), help="Okay"):
+            save_feedback("neutral", query, response, product_context)
 
 
 # =============================================================================
 # MAIN APP
 # =============================================================================
 def main():
+    products = load_products()
+    stock_data = load_stock()
+    images_data = load_images()
+    policies = load_policies()
+    product_names = [p.get('product_name', '') for p in products]
+    order_manager = get_order_manager()
+    
     # Header
     st.markdown("""
-    <div style="text-align: center; padding: 20px;">
-        <h1>👗 ByNoemie Fashion Assistant</h1>
-        <p style="color: #666;">Find your perfect outfit with AI-powered recommendations</p>
+    <div style="text-align:center;padding:20px 0 30px 0;">
+        <h1 style="font-family:'Cormorant Garamond',serif;font-size:42px;font-weight:400;color:#f5f5f5;margin:0;letter-spacing:2px;">BYNOEMIE</h1>
+        <p style="font-family:'Montserrat',sans-serif;font-size:12px;color:#888;letter-spacing:3px;margin-top:8px;">FASHION ASSISTANT</p>
     </div>
     """, unsafe_allow_html=True)
     
     # Sidebar
     with st.sidebar:
-        st.markdown("### 💡 Try asking:")
-        st.markdown("""
-        - *"Something for a romantic dinner"*
-        - *"Night out dress that sparkles"*
-        - *"Elegant but not boring"*
-        - *"Main character energy"*
-        - *"Wedding guest outfit"*
-        - *"Boss babe power look"*
-        """)
+        st.markdown("<h3 style='color:#d4a5a5;'>Quick Actions</h3>", unsafe_allow_html=True)
         
-        st.divider()
+        suggestions = [
+            "Show me romantic dinner dresses",
+            "Is the Kylie Jumpsuit in stock?",
+            "What's your refund policy?",
+            "I want to order Luna Dress"
+        ]
         
-        st.markdown("### ⚙️ Settings")
-        use_llm = st.checkbox(
-            "Use AI Assistant",
-            value=bool(get_api_key("GROQ_API_KEY")),
-            help="Enable for more conversational responses (requires Groq API key)"
-        )
+        for s in suggestions:
+            if st.button(s, key="sug_{}".format(s[:8]), use_container_width=True):
+                st.session_state.auto_query = s
         
-        st.divider()
+        st.markdown("---")
         
-        st.markdown("### 📊 Demo Info")
-        st.markdown(f"**Products:** {len(SAMPLE_PRODUCTS)}")
-        st.markdown("**Database:** In-memory (demo)")
+        # Current product context
+        if st.session_state.get('current_product'):
+            st.markdown("<h4 style='color:#d4a5a5;'>Currently Viewing</h4>", unsafe_allow_html=True)
+            st.write("**{}**".format(st.session_state.current_product))
+            if st.button("Clear", use_container_width=True):
+                st.session_state.current_product = None
         
-        if get_api_key("GROQ_API_KEY"):
-            st.success("✅ Groq API connected")
-        else:
-            st.warning("⚠️ Add GROQ_API_KEY for AI chat")
+        st.markdown("---")
+        st.metric("Products", len(products))
+        
+        if st.button("🚪 End Chat", use_container_width=True):
+            st.session_state.messages = []
+            st.session_state.current_product = None
+            st.rerun()
     
-    # Main chat interface
+    if not products:
+        st.error("Unable to load products.")
+        return
+    
+    # Initialize session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    if "current_product" not in st.session_state:
+        st.session_state.current_product = None
+    if "current_order" not in st.session_state:
+        st.session_state.current_order = None
     
     # Display chat history
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if "products" in message:
-                for product in message["products"]:
-                    display_product_card(product)
+    for i, msg in enumerate(st.session_state.messages):
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("products"):
+                display_products(msg["products"], stock_data, images_data, "h{}".format(i))
+            if msg["role"] == "assistant":
+                display_feedback_buttons(
+                    "hist_{}".format(i),
+                    msg.get("query", ""),
+                    msg["content"],
+                    st.session_state.current_product
+                )
     
-    # Chat input
-    if prompt := st.chat_input("What are you looking for today?"):
-        # Add user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        
+    # Input
+    query = st.session_state.pop("auto_query", None) or st.chat_input("How may I assist you?")
+    
+    if query:
+        st.session_state.messages.append({"role": "user", "content": query})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(query)
         
-        # Search products
-        with st.spinner("Finding perfect matches..."):
-            results = search_products(prompt, SAMPLE_PRODUCTS)
+        # Classify intent WITH FULL CHAT HISTORY (OpenAI)
+        intent_result = llm_classify_intent(
+            query, 
+            product_names,
+            chat_history=st.session_state.messages[:-1],  # All messages except current
+            current_product=st.session_state.current_product
+        )
+        intent = intent_result.get("intent", "GENERAL")
+        product_mentioned = intent_result.get("product_mentioned")
+        size_mentioned = intent_result.get("size")
+        color_mentioned = intent_result.get("color")
         
-        # Generate response
         with st.chat_message("assistant"):
-            if results:
-                # Try LLM response if enabled
-                llm_response = None
-                if use_llm:
-                    llm_response = get_llm_response(prompt, results)
-                
-                if llm_response:
-                    st.markdown(llm_response)
+            response = ""
+            show_products = []
+            response_placeholder = st.empty()
+            
+            # Get product
+            product = find_product(product_mentioned, products) if product_mentioned else None
+            
+            # Update context
+            if product:
+                st.session_state.current_product = product.get('product_name')
+            
+            client = get_openai_client()
+            
+            # === STOCK CHECK ===
+            if intent == "STOCK_CHECK":
+                if product:
+                    fresh_stock = reload_stock()
+                    stock_info = get_stock_info(product, fresh_stock, size_mentioned, color_mentioned)
+                    
+                    if client:
+                        messages = [
+                            {"role": "system", "content": "Provide stock info professionally."},
+                            {"role": "user", "content": "Query: {}\nStock Info: {}".format(query, stock_info)}
+                        ]
+                        response = stream_response(client, messages, response_placeholder) or stock_info
+                    else:
+                        response = stock_info
+                        response_placeholder.markdown(response)
+                    show_products = [product]
                 else:
-                    st.markdown(f"I found **{len(results)}** items that match your vibe! Here are my top picks:")
+                    response = "Which product would you like me to check? Please mention the name."
+                    response_placeholder.markdown(response)
+            
+            # === RECOMMENDATION ===
+            elif intent == "RECOMMENDATION":
+                # Use LLM to understand what user wants
+                query_understanding = llm_understand_query(query, client) if client else {}
                 
-                # Display products
-                for product in results:
-                    display_product_card(product)
+                # Detect if this is a broad category query
+                broad_categories = {
+                    "shoes": "Footwear",
+                    "shoe": "Footwear",
+                    "heels": "Footwear",
+                    "heel": "Footwear",
+                    "footwear": "Footwear",
+                    "sandals": "Footwear",
+                    "bags": "Accessories",
+                    "bag": "Accessories",
+                    "purse": "Accessories",
+                    "clutch": "Accessories",
+                    "dresses": "Clothing",
+                    "dress": "Clothing",
+                    "jumpsuits": "Clothing",
+                    "jumpsuit": "Clothing",
+                    "tops": "Clothing",
+                    "top": "Clothing",
+                    "sets": "Clothing",
+                    "set": "Clothing",
+                    "clothing": "Clothing",
+                    "clothes": "Clothing",
+                }
                 
-                # Save to history
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": llm_response or f"Found {len(results)} matching items!",
-                    "products": results
-                })
+                q_lower = query.lower()
+                is_broad_query = False
+                category_requested = None
+                
+                # Check if query is asking for a broad category
+                for cat_keyword, cat_name in broad_categories.items():
+                    if cat_keyword in q_lower and not any(specific in q_lower for specific in ['for wedding', 'for party', 'for dinner', 'sparkly', 'silk', 'sequin', 'black', 'white', 'red', 'gold']):
+                        is_broad_query = True
+                        category_requested = cat_name
+                        break
+                
+                # Search with understanding - use 10 products for broad queries
+                max_results = 10 if is_broad_query else 8
+                results = search_products(query, products, max_results, query_understanding)
+                
+                if results:
+                    # Get product types found for better response
+                    types_found = list(set([p.get('product_type', '') for p in results]))
+                    subcats_found = list(set([p.get('subcategory', '') for p in results if p.get('subcategory')]))
+                    ctx = ', '.join([p.get('product_name', '') for p in results[:5]])
+                    
+                    if is_broad_query and client:
+                        # For broad queries, show products AND ask follow-up
+                        follow_up_prompt = """You're a fashion stylist. The customer asked for "{}" and we found {} options.
+
+Products found: {}
+
+Write a SHORT response (2-3 sentences) that:
+1. Shows enthusiasm about the options
+2. Mentions 1-2 specific product names
+3. Asks ONE helpful follow-up question about:
+   - What occasion they're shopping for (party, work, dinner, wedding)
+   - OR what style they prefer (elegant, bold, minimalist)
+   - OR what heel height/comfort level they want (for shoes)
+
+Be conversational, not robotic.""".format(query, len(results), ctx)
+                        
+                        messages = [
+                            {"role": "system", "content": follow_up_prompt},
+                            {"role": "user", "content": query}
+                        ]
+                        response = stream_response(client, messages, response_placeholder)
+                    elif client:
+                        messages = [
+                            {"role": "system", "content": "Fashion stylist. SHORT rec (2 sentences). Mention specific product names from the list."},
+                            {"role": "user", "content": "Query: {}\nProducts found ({}): {}".format(query, ', '.join(types_found), ctx)}
+                        ]
+                        response = stream_response(client, messages, response_placeholder)
+                    
+                    if not response:
+                        if is_broad_query:
+                            response = "Here are {} {} options for you! ✨ What occasion are you shopping for?".format(len(results), types_found[0] if types_found else 'pieces')
+                        else:
+                            response = "Here are {} {} for you! ✨".format(len(results), types_found[0] if types_found else 'pieces')
+                        response_placeholder.markdown(response)
+                    show_products = results
+                    st.session_state.current_product = results[0].get('product_name')
+                else:
+                    response = "I couldn't find products matching that. Could you try different keywords or browse our collection?"
+                    response_placeholder.markdown(response)
+            
+            # === PRODUCT INFO ===
+            elif intent == "PRODUCT_INFO":
+                if product:
+                    info = "{} - {} {}\n{}\nPerfect for: {}".format(
+                        product['product_name'],
+                        product.get('price_currency', 'MYR'),
+                        product.get('price_min', 0),
+                        product.get('mood_summary', ''),
+                        product.get('ideal_for', '')
+                    )
+                    if client:
+                        messages = [
+                            {"role": "system", "content": "Describe product elegantly."},
+                            {"role": "user", "content": info}
+                        ]
+                        response = stream_response(client, messages, response_placeholder) or info
+                    else:
+                        response = info
+                        response_placeholder.markdown(response)
+                    show_products = [product]
+                else:
+                    response = "Which product would you like to know about?"
+                    response_placeholder.markdown(response)
+            
+            # === POLICY ===
+            elif intent == "POLICY_QUESTION":
+                policy_answer, _ = get_policy_answer(query, policies)
+                if client:
+                    messages = [
+                        {"role": "system", "content": "Answer policy question helpfully."},
+                        {"role": "user", "content": "Query: {}\nPolicy: {}".format(query, policy_answer[:1000])}
+                    ]
+                    response = stream_response(client, messages, response_placeholder) or policy_answer
+                else:
+                    response = policy_answer
+                    response_placeholder.markdown(response)
+            
+            # === GREETING ===
+            elif intent == "GREETING":
+                if client:
+                    messages = [
+                        {"role": "system", "content": "Warm fashion assistant. Brief greeting."},
+                        {"role": "user", "content": query}
+                    ]
+                    response = stream_response(client, messages, response_placeholder)
+                if not response:
+                    response = "Welcome to ByNoemie! ✨ How can I help you today?"
+                    response_placeholder.markdown(response)
+            
+            # === END ===
+            elif intent == "END_CONVERSATION":
+                response = "Thank you for visiting ByNoemie! 💕 Have a wonderful day!"
+                response_placeholder.markdown(response)
+            
+            # === THANKS ===
+            elif intent == "THANKS":
+                response = "You're welcome! 💕 Anything else I can help with?"
+                response_placeholder.markdown(response)
+            
+            # === OFF_TOPIC - Politely redirect to fashion ===
+            elif intent == "OFF_TOPIC":
+                if client:
+                    # Use LLM to generate varied, natural redirect responses
+                    redirect_prompt = """You are ByNoemie's friendly fashion assistant. The user asked something off-topic (not about fashion/products/store).
+
+User's message: "{}"
+
+Respond naturally and conversationally (1-2 sentences). Be warm but brief. Politely mention you're here to help with fashion/shopping, then ask what they're looking for OR suggest browsing dresses/heels/bags.
+
+VARY your responses. Examples of good responses:
+- "Haha, I wish I could help with that! But I'm here for all things fashion 👗 Looking for something special today?"
+- "That's outside my expertise! I'm your fashion guide - want to explore our new arrivals?"
+- "I'll leave that to Google 😄 But if you need outfit advice, I'm your girl! Any occasion coming up?"
+- "Not my area, but I do know style! Need help finding the perfect dress or heels?"
+
+Do NOT use bullet points. Keep it casual and short.""".format(query)
+                    
+                    messages = [
+                        {"role": "system", "content": redirect_prompt},
+                        {"role": "user", "content": query}
+                    ]
+                    response = stream_response(client, messages, response_placeholder)
+                
+                if not response:
+                    # Fallback varied responses
+                    import random
+                    fallbacks = [
+                        "I'm all about fashion! 👗 Can I help you find something fabulous to wear?",
+                        "That's a bit outside my wheelhouse! But I'd love to help you find the perfect outfit - what's the occasion?",
+                        "I'm your style assistant, so fashion is my thing! Looking for dresses, heels, or something else?",
+                        "Hmm, I'm better at outfit advice! 😊 Want me to show you our latest pieces?",
+                        "I stick to the fashion lane! Need help finding something gorgeous?",
+                    ]
+                    response = random.choice(fallbacks)
+                    response_placeholder.markdown(response)
+            
+            # === DEFAULT (GENERAL fashion questions) ===
             else:
-                no_results_msg = "I couldn't find an exact match, but let me show you some popular options!"
-                st.markdown(no_results_msg)
-                
-                # Show random recommendations
-                import random
-                random_picks = random.sample(SAMPLE_PRODUCTS, min(3, len(SAMPLE_PRODUCTS)))
-                for product in random_picks:
-                    display_product_card(product)
-                
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": no_results_msg,
-                    "products": random_picks
-                })
-    
-    # Footer
-    st.markdown("---")
-    st.markdown(
-        "<div style='text-align: center; color: #888;'>"
-        "Built with ❤️ using LangChain, LangGraph & Streamlit | "
-        "<a href='https://github.com/bynoemie'>View on GitHub</a>"
-        "</div>",
-        unsafe_allow_html=True
-    )
+                if client:
+                    messages = [
+                        {"role": "system", "content": "You are ByNoemie's fashion assistant. ONLY answer questions about fashion, clothing, style, and our store. If the question is not about fashion/clothing/store, politely say you can only help with fashion-related questions."},
+                        {"role": "user", "content": query}
+                    ]
+                    response = stream_response(client, messages, response_placeholder)
+                if not response:
+                    response = "I can help with recommendations, stock checks, and policy questions!"
+                    response_placeholder.markdown(response)
+            
+            # Show products
+            if show_products:
+                display_products(show_products, stock_data, images_data, "n{}".format(len(st.session_state.messages)))
+            
+            # Feedback for every response
+            display_feedback_buttons(
+                "new_{}".format(len(st.session_state.messages)),
+                query,
+                response or "Response",
+                st.session_state.current_product
+            )
+            
+            # Save message
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response or "Response",
+                "products": show_products,
+                "query": query
+            })
 
 
 if __name__ == "__main__":

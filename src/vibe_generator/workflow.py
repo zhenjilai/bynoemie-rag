@@ -41,17 +41,27 @@ class VibeGeneratorState(TypedDict):
     material: str
     price: float
     currency: str
+    image_url: Optional[str]
     
     # Intermediate results
     analysis: Optional[Dict[str, Any]]
     raw_vibes: Optional[Dict[str, Any]]
     rule_based_vibes: Optional[List[str]]
     
-    # Output
+    # Output - Existing vibe fields (KEEP - granular like Groq)
     vibe_tags: List[str]
     mood_summary: Optional[str]
     ideal_for: Optional[str]
     styling_tip: Optional[str]
+    occasions: Optional[List[str]]
+    
+    # Output - NEW visual/structural fields
+    category: Optional[str]
+    subcategory: Optional[str]
+    materials: Optional[List[str]]
+    has_embellishment: Optional[bool]
+    style_attributes: Optional[List[str]]
+    silhouette: Optional[str]
     
     # Metadata
     errors: List[str]
@@ -123,15 +133,20 @@ Extract as JSON:
 
 def generate_vibes(state: VibeGeneratorState) -> VibeGeneratorState:
     """
-    Node 2: Generate creative vibe tags using LLM.
+    Node 2: Generate creative vibe tags AND visual attributes using LLM.
     
-    Uses free-form generation for maximum creativity.
+    Produces:
+    - vibe_tags (granular: "wedding guest", "office chic", etc.)
+    - mood_summary
+    - ideal_for
+    - styling_tip
+    - occasions
+    - category, subcategory, materials, has_embellishment, style_attributes, silhouette
     """
     logger.info(f"Generating vibes for: {state['product_name']}")
     
     try:
         from src.llm import create_llm_client
-        from config import settings
         
         llm = create_llm_client()
         
@@ -146,24 +161,62 @@ Based on analysis:
 - USPs: {', '.join(state['analysis'].get('unique_selling_points', []))}
 """
         
-        system_prompt = settings.get_prompt("vibe_generator", "freeform")["system"]
+        # Enhanced system prompt for granular vibes + visual attributes
+        system_prompt = """You are an expert fashion stylist and product analyst for a luxury boutique.
+Your task is to generate DETAILED, GRANULAR product metadata.
+
+For vibe_tags, use SPECIFIC, occasion-based descriptors like:
+- Occasions: "wedding guest", "cocktail event", "romantic dinner", "garden party", "office chic", "night out", "gala", "brunch", "beach vacation", "date night"
+- Styles: "effortlessly chic", "figure flattering", "day to night", "spring fresh", "autumn elegance", "summer vibes", "red carpet ready"
+- Moods: "elegant", "romantic", "sophisticated", "glamorous", "minimalist", "edgy", "bold", "timeless", "bohemian", "feminine", "playful", "luxurious"
+
+Be creative and specific. Avoid generic tags like just "nice" or "pretty".
+
+Return ONLY valid JSON."""
         
-        user_prompt = f"""Generate creative vibe tags for this product:
+        user_prompt = f"""Generate complete metadata for this fashion product:
 
 Product: {state['product_name']}
 Type: {state['product_type']}
 Colors: {state['colors']}
 Material: {state['material']}
+Price: {state['price']} {state['currency']}
 Description: {state['description']}
 {analysis_context}
 
-Create 8-12 evocative, creative vibe tags. Be specific and memorable.
-Return JSON: {{"vibe_tags": [...], "mood_summary": "...", "ideal_for": "...", "styling_tip": "..."}}"""
+Return JSON with ALL these fields:
+
+{{
+    "vibe_tags": ["wedding guest", "elegant", "romantic", "figure flattering", "garden party", "effortlessly chic"],
+    "mood_summary": "A stunning piece that embodies timeless elegance with a modern twist...",
+    "ideal_for": "The sophisticated woman who wants to make a memorable impression at special occasions",
+    "styling_tip": "Pair with strappy gold heels and delicate jewelry for a polished look",
+    "occasions": ["wedding", "garden party", "cocktail event", "romantic dinner", "gala"],
+    "category": "Clothing",
+    "subcategory": "Dress",
+    "materials": ["silk", "chiffon"],
+    "has_embellishment": false,
+    "style_attributes": ["sleeveless", "fitted", "midi length", "v-neck"],
+    "silhouette": "A-line"
+}}
+
+IMPORTANT:
+- vibe_tags: 6-10 GRANULAR, specific tags (not generic)
+- mood_summary: 1-2 evocative sentences
+- ideal_for: Who this is perfect for
+- styling_tip: Practical styling advice
+- occasions: 3-6 suitable occasions
+- category: Clothing, Footwear, or Accessories
+- subcategory: Dress, Heel, Bag, Top, Jumpsuit, Set, etc.
+- materials: Specific materials (silk, sequin, leather, lace, velvet, chiffon, etc.)
+- has_embellishment: true if sequins, beads, rhinestones, crystals, glitter
+- style_attributes: Visual details (neckline, sleeves, fit, length, back style)
+- silhouette: Shape (A-line, bodycon, empire, fit-and-flare, straight, mermaid)"""
 
         response = llm.chat(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            temperature=0.8  # Higher for creativity
+            temperature=0.7
         )
         
         from src.llm import parse_json_response
@@ -172,10 +225,19 @@ Return JSON: {{"vibe_tags": [...], "mood_summary": "...", "ideal_for": "...", "s
         return {
             **state,
             "raw_vibes": vibes,
+            # Existing vibe fields
             "vibe_tags": vibes.get("vibe_tags", []),
             "mood_summary": vibes.get("mood_summary"),
             "ideal_for": vibes.get("ideal_for"),
             "styling_tip": vibes.get("styling_tip"),
+            "occasions": vibes.get("occasions", []),
+            # NEW visual/structural fields
+            "category": vibes.get("category", "Clothing"),
+            "subcategory": vibes.get("subcategory", ""),
+            "materials": vibes.get("materials", []),
+            "has_embellishment": vibes.get("has_embellishment", False),
+            "style_attributes": vibes.get("style_attributes", []),
+            "silhouette": vibes.get("silhouette", ""),
             "status": "generated"
         }
         
@@ -290,17 +352,46 @@ def validate_output(state: VibeGeneratorState) -> VibeGeneratorState:
 
 def handle_error(state: VibeGeneratorState) -> VibeGeneratorState:
     """
-    Error handling node - provides fallback vibes.
+    Error handling node - provides fallback vibes and metadata.
     """
     logger.error(f"Error handling for: {state['product_name']}, errors: {state.get('errors', [])}")
     
     # Provide minimal fallback
     fallback_tags = ["elegant", "versatile", "stylish", "feminine", "chic"]
     
+    # Detect category from product type
+    product_type = state.get("product_type", "").lower()
+    product_name = state.get("product_name", "").lower()
+    
+    category = "Clothing"
+    subcategory = "Dress"
+    
+    if any(w in product_type or w in product_name for w in ['heel', 'sandal', 'shoe', 'pump']):
+        category = "Footwear"
+        subcategory = "Heel"
+    elif any(w in product_type or w in product_name for w in ['bag', 'clutch', 'tote']):
+        category = "Accessories"
+        subcategory = "Bag"
+    elif 'jumpsuit' in product_type or 'jumpsuit' in product_name:
+        subcategory = "Jumpsuit"
+    elif 'top' in product_type or 'blouse' in product_type:
+        subcategory = "Top"
+    elif 'set' in product_type:
+        subcategory = "Set"
+    
     return {
         **state,
         "vibe_tags": fallback_tags,
         "mood_summary": "A versatile piece for any occasion.",
+        "ideal_for": None,
+        "styling_tip": None,
+        "occasions": [],
+        "category": category,
+        "subcategory": subcategory,
+        "materials": [],
+        "has_embellishment": False,
+        "style_attributes": [],
+        "silhouette": "",
         "status": "complete_with_fallback"
     }
 
@@ -431,13 +522,14 @@ class VibeGeneratorWorkflow:
         colors: str = "",
         material: str = "",
         price: float = 0,
-        currency: str = "MYR"
+        currency: str = "MYR",
+        image_url: str = ""
     ) -> Dict[str, Any]:
         """
-        Generate vibe tags for a product.
+        Generate vibe tags and visual attributes for a product.
         
         Returns:
-            Dict with vibe_tags, mood_summary, etc.
+            Dict with vibe_tags, mood_summary, category, materials, etc.
         """
         # Initialize state
         initial_state: VibeGeneratorState = {
@@ -449,13 +541,24 @@ class VibeGeneratorWorkflow:
             "material": material,
             "price": price,
             "currency": currency,
+            "image_url": image_url,
             "analysis": None,
             "raw_vibes": None,
             "rule_based_vibes": None,
+            # Existing vibe fields
             "vibe_tags": [],
             "mood_summary": None,
             "ideal_for": None,
             "styling_tip": None,
+            "occasions": None,
+            # NEW visual/structural fields
+            "category": None,
+            "subcategory": None,
+            "materials": None,
+            "has_embellishment": None,
+            "style_attributes": None,
+            "silhouette": None,
+            # Metadata
             "errors": [],
             "retry_count": 0,
             "status": "pending"
@@ -468,10 +571,20 @@ class VibeGeneratorWorkflow:
             return {
                 "product_id": final_state["product_id"],
                 "product_name": final_state["product_name"],
+                # Existing vibe fields (granular)
                 "vibe_tags": final_state["vibe_tags"],
                 "mood_summary": final_state.get("mood_summary"),
                 "ideal_for": final_state.get("ideal_for"),
                 "styling_tip": final_state.get("styling_tip"),
+                "occasions": final_state.get("occasions", []),
+                # NEW visual/structural fields
+                "category": final_state.get("category", "Clothing"),
+                "subcategory": final_state.get("subcategory", ""),
+                "materials": final_state.get("materials", []),
+                "has_embellishment": final_state.get("has_embellishment", False),
+                "style_attributes": final_state.get("style_attributes", []),
+                "silhouette": final_state.get("silhouette", ""),
+                # Metadata
                 "status": final_state["status"],
                 "errors": final_state.get("errors", [])
             }
@@ -482,6 +595,16 @@ class VibeGeneratorWorkflow:
                 "product_id": product_id,
                 "product_name": product_name,
                 "vibe_tags": ["elegant", "versatile", "stylish"],
+                "mood_summary": None,
+                "ideal_for": None,
+                "styling_tip": None,
+                "occasions": [],
+                "category": "Clothing",
+                "subcategory": "",
+                "materials": [],
+                "has_embellishment": False,
+                "style_attributes": [],
+                "silhouette": "",
                 "status": "error",
                 "errors": [str(e)]
             }
@@ -497,13 +620,24 @@ class VibeGeneratorWorkflow:
             "material": kwargs.get("material", ""),
             "price": kwargs.get("price", 0),
             "currency": kwargs.get("currency", "MYR"),
+            "image_url": kwargs.get("image_url", ""),
             "analysis": None,
             "raw_vibes": None,
             "rule_based_vibes": None,
+            # Existing vibe fields
             "vibe_tags": [],
             "mood_summary": None,
             "ideal_for": None,
             "styling_tip": None,
+            "occasions": None,
+            # NEW visual/structural fields
+            "category": None,
+            "subcategory": None,
+            "materials": None,
+            "has_embellishment": None,
+            "style_attributes": None,
+            "silhouette": None,
+            # Metadata
             "errors": [],
             "retry_count": 0,
             "status": "pending"
@@ -514,8 +648,20 @@ class VibeGeneratorWorkflow:
         return {
             "product_id": final_state["product_id"],
             "product_name": final_state["product_name"],
+            # Existing vibe fields
             "vibe_tags": final_state["vibe_tags"],
             "mood_summary": final_state.get("mood_summary"),
+            "ideal_for": final_state.get("ideal_for"),
+            "styling_tip": final_state.get("styling_tip"),
+            "occasions": final_state.get("occasions", []),
+            # NEW visual/structural fields
+            "category": final_state.get("category", "Clothing"),
+            "subcategory": final_state.get("subcategory", ""),
+            "materials": final_state.get("materials", []),
+            "has_embellishment": final_state.get("has_embellishment", False),
+            "style_attributes": final_state.get("style_attributes", []),
+            "silhouette": final_state.get("silhouette", ""),
+            # Metadata
             "status": final_state["status"]
         }
     
@@ -524,7 +670,7 @@ class VibeGeneratorWorkflow:
         products: List[Dict[str, Any]],
         max_concurrent: int = 5
     ) -> List[Dict[str, Any]]:
-        """Generate vibes for multiple products"""
+        """Generate vibes and metadata for multiple products"""
         results = []
         
         for i, product in enumerate(products):
@@ -538,7 +684,8 @@ class VibeGeneratorWorkflow:
                 colors=product.get("colors_available", ""),
                 material=product.get("material", ""),
                 price=float(product.get("price_min", 0)),
-                currency=product.get("price_currency", "MYR")
+                currency=product.get("price_currency", "MYR"),
+                image_url=product.get("image_url_1", "") or product.get("image_url", "")
             )
             
             results.append(result)

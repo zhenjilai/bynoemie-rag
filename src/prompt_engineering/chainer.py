@@ -115,12 +115,15 @@ class PromptChainer:
                 step_chain = step_chain | RunnableLambda(step.transform_output)
             
             # Add step name to output
-            chain = chain | RunnableLambda(
-                lambda x, step_name=step.name, sc=step_chain: {
-                    **x if isinstance(x, dict) else {"input": x},
-                    step_name: sc.invoke(x)
-                }
-            )
+            # Add step name to output
+            def make_step_runner(step_name, sc):
+                def run_step(x):
+                    base = x if isinstance(x, dict) else {"input": x}
+                    result = {**base, step_name: sc.invoke(x)}
+                    return result
+                return run_step
+            
+            chain = chain | RunnableLambda(make_step_runner(step.name, step_chain))
         
         self._chain = chain
         return chain

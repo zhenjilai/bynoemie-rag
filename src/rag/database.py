@@ -71,23 +71,38 @@ class Product:
 
 @dataclass
 class ProductVibe:
-    """Product vibe tags model"""
+    """Product vibe tags and visual attributes model"""
     product_id: str
     vibe_tags: List[str]
     mood_summary: str = ""
     ideal_for: str = ""
     styling_tip: str = ""
+    occasions: List[str] = None
+    # NEW visual/structural fields
+    category: str = ""
+    subcategory: str = ""
+    materials: List[str] = None
+    has_embellishment: bool = False
+    style_attributes: List[str] = None
+    silhouette: str = ""
     generation_method: str = "rule_based"  # rule_based, llm, hybrid
     created_at: str = ""
     
     def __post_init__(self):
         if not self.created_at:
             self.created_at = datetime.now().isoformat()
+        if self.occasions is None:
+            self.occasions = []
+        if self.materials is None:
+            self.materials = []
+        if self.style_attributes is None:
+            self.style_attributes = []
     
     def to_text(self) -> str:
         """Convert to searchable text"""
         vibes_text = ", ".join(self.vibe_tags)
-        return f"{vibes_text}. {self.mood_summary}. {self.ideal_for}."
+        materials_text = ", ".join(self.materials) if self.materials else ""
+        return f"{vibes_text}. {self.mood_summary}. {self.ideal_for}. {materials_text}."
 
 
 class ProductDatabase:
@@ -114,6 +129,7 @@ class ProductDatabase:
         self.embedding_model = embedding_model
         
         # Initialize ChromaDB
+        print("      → Creating ChromaDB client...")
         self._client = chromadb.PersistentClient(
             path=str(self.persist_directory),
             settings=Settings(
@@ -123,9 +139,13 @@ class ProductDatabase:
         )
         
         # Initialize embedding function
+        print(f"      → Loading embedding model: {embedding_model}")
+        print("        (This may download ~90MB on first run)")
         self._embedding_fn = self._create_embedding_function()
+        print("      → Embedding model loaded ✓")
         
         # Get or create collections
+        print("      → Creating collections...")
         self._products_collection = self._get_or_create_collection("products")
         self._vibes_collection = self._get_or_create_collection("product_vibes")
         
@@ -303,7 +323,7 @@ class ProductDatabase:
     # =========================================================================
     
     def add_vibes(self, vibe: ProductVibe) -> bool:
-        """Add vibe tags for a product"""
+        """Add vibe tags and metadata for a product"""
         try:
             self._vibes_collection.upsert(
                 ids=[vibe.product_id],
@@ -314,6 +334,14 @@ class ProductDatabase:
                     "mood_summary": vibe.mood_summary,
                     "ideal_for": vibe.ideal_for,
                     "styling_tip": vibe.styling_tip,
+                    "occasions": json.dumps(vibe.occasions or []),
+                    # NEW fields
+                    "category": vibe.category or "",
+                    "subcategory": vibe.subcategory or "",
+                    "materials": json.dumps(vibe.materials or []),
+                    "has_embellishment": str(vibe.has_embellishment),
+                    "style_attributes": json.dumps(vibe.style_attributes or []),
+                    "silhouette": vibe.silhouette or "",
                     "generation_method": vibe.generation_method,
                     "created_at": vibe.created_at
                 }]
@@ -339,6 +367,14 @@ class ProductDatabase:
                     mood_summary=v.get("mood_summary", ""),
                     ideal_for=v.get("ideal_for", ""),
                     styling_tip=v.get("styling_tip", ""),
+                    occasions=v.get("occasions", []),
+                    # NEW fields
+                    category=v.get("category", ""),
+                    subcategory=v.get("subcategory", ""),
+                    materials=v.get("materials", []),
+                    has_embellishment=v.get("has_embellishment", False),
+                    style_attributes=v.get("style_attributes", []),
+                    silhouette=v.get("silhouette", ""),
                     generation_method=v.get("generation_method", "rule_based")
                 )
                 
@@ -355,7 +391,7 @@ class ProductDatabase:
         return added, skipped
     
     def get_vibes(self, product_id: str) -> Optional[Dict[str, Any]]:
-        """Get vibes for a product"""
+        """Get vibes and metadata for a product"""
         try:
             result = self._vibes_collection.get(
                 ids=[product_id],
@@ -371,6 +407,14 @@ class ProductDatabase:
                     "mood_summary": metadata.get("mood_summary", ""),
                     "ideal_for": metadata.get("ideal_for", ""),
                     "styling_tip": metadata.get("styling_tip", ""),
+                    "occasions": json.loads(metadata.get("occasions", "[]")),
+                    # NEW fields
+                    "category": metadata.get("category", ""),
+                    "subcategory": metadata.get("subcategory", ""),
+                    "materials": json.loads(metadata.get("materials", "[]")),
+                    "has_embellishment": metadata.get("has_embellishment", "False") == "True",
+                    "style_attributes": json.loads(metadata.get("style_attributes", "[]")),
+                    "silhouette": metadata.get("silhouette", ""),
                     "generation_method": metadata.get("generation_method", ""),
                     "created_at": metadata.get("created_at", "")
                 }

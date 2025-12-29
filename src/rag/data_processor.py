@@ -182,7 +182,7 @@ class DataProcessor:
         self,
         product: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Generate vibes for a single product"""
+        """Generate vibes and visual attributes for a single product"""
         
         result = {
             "product_id": product["product_id"],
@@ -190,6 +190,14 @@ class DataProcessor:
             "mood_summary": "",
             "ideal_for": "",
             "styling_tip": "",
+            "occasions": [],
+            # NEW fields
+            "category": "",
+            "subcategory": "",
+            "materials": [],
+            "has_embellishment": False,
+            "style_attributes": [],
+            "silhouette": "",
             "generation_method": self.vibe_method
         }
         
@@ -216,6 +224,14 @@ class DataProcessor:
                     result["mood_summary"] = llm_result.get("mood_summary", "")
                     result["ideal_for"] = llm_result.get("ideal_for", "")
                     result["styling_tip"] = llm_result.get("styling_tip", "")
+                    result["occasions"] = llm_result.get("occasions", [])
+                    # NEW fields from enhanced workflow
+                    result["category"] = llm_result.get("category", "")
+                    result["subcategory"] = llm_result.get("subcategory", "")
+                    result["materials"] = llm_result.get("materials", [])
+                    result["has_embellishment"] = llm_result.get("has_embellishment", False)
+                    result["style_attributes"] = llm_result.get("style_attributes", [])
+                    result["silhouette"] = llm_result.get("silhouette", "")
                     result["generation_method"] = "llm"
                 else:
                     # Fallback to rule-based
@@ -251,6 +267,14 @@ class DataProcessor:
                     result["mood_summary"] = llm_result.get("mood_summary", "")
                     result["ideal_for"] = llm_result.get("ideal_for", "")
                     result["styling_tip"] = llm_result.get("styling_tip", "")
+                    result["occasions"] = llm_result.get("occasions", [])
+                    # NEW fields from enhanced workflow
+                    result["category"] = llm_result.get("category", "")
+                    result["subcategory"] = llm_result.get("subcategory", "")
+                    result["materials"] = llm_result.get("materials", [])
+                    result["has_embellishment"] = llm_result.get("has_embellishment", False)
+                    result["style_attributes"] = llm_result.get("style_attributes", [])
+                    result["silhouette"] = llm_result.get("silhouette", "")
                     result["generation_method"] = "hybrid"
                 else:
                     result["vibe_tags"] = rule_vibes
@@ -314,17 +338,23 @@ class DataProcessor:
         self.db.add_products(products)
         
         # Generate vibes for products that need it
+        total_to_process = len(products_to_process)
         for i, product in enumerate(products_to_process):
             try:
+                # Progress indicator
+                progress = f"[{i+1}/{total_to_process}]"
+                print(f"\n   {progress} Processing: {product.get('product_name', 'Unknown')[:40]}")
+                
                 # Check if vibes already exist (for updated products)
                 if not force_regenerate and self.db.has_vibes(product["product_id"]):
                     # Product updated but vibes exist - only regenerate if content changed
                     if product in unchanged_products:
+                        print(f"   {progress} ⏭️  Skipped (unchanged)")
                         stats.vibes_skipped += 1
                         continue
                 
                 # Generate vibes
-                logger.info(f"Generating vibes for {product['product_name']} ({i+1}/{len(products_to_process)})")
+                print(f"   {progress} 🔄 Generating vibes ({self.vibe_method})...")
                 
                 vibe_result = self.generate_vibes_for_product(product)
                 
@@ -335,16 +365,27 @@ class DataProcessor:
                     mood_summary=vibe_result.get("mood_summary", ""),
                     ideal_for=vibe_result.get("ideal_for", ""),
                     styling_tip=vibe_result.get("styling_tip", ""),
+                    occasions=vibe_result.get("occasions", []),
+                    # NEW fields
+                    category=vibe_result.get("category", ""),
+                    subcategory=vibe_result.get("subcategory", ""),
+                    materials=vibe_result.get("materials", []),
+                    has_embellishment=vibe_result.get("has_embellishment", False),
+                    style_attributes=vibe_result.get("style_attributes", []),
+                    silhouette=vibe_result.get("silhouette", ""),
                     generation_method=vibe_result.get("generation_method", "")
                 )
                 
                 if self.db.add_vibes(vibe):
                     stats.vibes_generated += 1
+                    print(f"   {progress} ✅ Generated: {', '.join(vibe_result['vibe_tags'][:3])}...")
                 else:
                     stats.errors += 1
+                    print(f"   {progress} ❌ Failed to save")
                     
             except Exception as e:
                 logger.error(f"Error processing {product.get('product_id')}: {e}")
+                print(f"   {progress} ❌ Error: {e}")
                 stats.errors += 1
         
         # Handle products without vibes (from unchanged list)
@@ -368,6 +409,14 @@ class DataProcessor:
                     mood_summary=vibe_result.get("mood_summary", ""),
                     ideal_for=vibe_result.get("ideal_for", ""),
                     styling_tip=vibe_result.get("styling_tip", ""),
+                    occasions=vibe_result.get("occasions", []),
+                    # NEW fields
+                    category=vibe_result.get("category", ""),
+                    subcategory=vibe_result.get("subcategory", ""),
+                    materials=vibe_result.get("materials", []),
+                    has_embellishment=vibe_result.get("has_embellishment", False),
+                    style_attributes=vibe_result.get("style_attributes", []),
+                    silhouette=vibe_result.get("silhouette", ""),
                     generation_method=vibe_result.get("generation_method", "")
                 )
                 
@@ -392,7 +441,7 @@ class DataProcessor:
         return stats
     
     def export_to_json(self, output_path: str):
-        """Export all products with vibes to JSON"""
+        """Export all products with vibes and metadata to JSON"""
         products = self.db.get_all_products()
         
         export_data = []
@@ -401,9 +450,19 @@ class DataProcessor:
             
             export_data.append({
                 **p,
+                # Existing vibe fields
                 "vibe_tags": vibes.get("vibe_tags", []) if vibes else [],
                 "mood_summary": vibes.get("mood_summary", "") if vibes else "",
                 "ideal_for": vibes.get("ideal_for", "") if vibes else "",
+                "styling_tip": vibes.get("styling_tip", "") if vibes else "",
+                "occasions": vibes.get("occasions", []) if vibes else [],
+                # NEW visual/structural fields
+                "category": vibes.get("category", "") if vibes else "",
+                "subcategory": vibes.get("subcategory", "") if vibes else "",
+                "materials": vibes.get("materials", []) if vibes else [],
+                "has_embellishment": vibes.get("has_embellishment", False) if vibes else False,
+                "style_attributes": vibes.get("style_attributes", []) if vibes else [],
+                "silhouette": vibes.get("silhouette", "") if vibes else "",
             })
         
         with open(output_path, 'w', encoding='utf-8') as f:

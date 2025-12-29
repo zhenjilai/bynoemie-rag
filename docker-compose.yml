@@ -1,0 +1,122 @@
+# ByNoemie RAG Chatbot - Docker Compose
+# Production deployment with API + UI services
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # FastAPI Backend
+  # =============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: production
+    container_name: bynoemie-api
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - PORT=8000
+      - ENV=production
+    volumes:
+      - ./data:/app/data
+      - feedback_data:/app/data/feedback
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # =============================================================================
+  # Streamlit UI
+  # =============================================================================
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: streamlit
+    container_name: bynoemie-ui
+    ports:
+      - "8501:8501"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - STREAMLIT_SERVER_PORT=8501
+    volumes:
+      - ./data:/app/data
+      - feedback_data:/app/data/feedback
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # =============================================================================
+  # Nginx Reverse Proxy (optional - for production with custom domain)
+  # =============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: bynoemie-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - ui
+    restart: unless-stopped
+    profiles:
+      - with-nginx
+
+volumes:
+  feedback_data:
+
+networks:
+  default:
+    name: bynoemie-network
+
+# =============================================================================
+# Usage:
+# =============================================================================
+# 1. Create .env file with your API keys:
+#    OPENAI_API_KEY=sk-xxx
+#    GROQ_API_KEY=gsk-xxx (optional)
+#
+# 2. Start all services:
+#    docker-compose up -d
+#
+# 3. Start only API:
+#    docker-compose up -d api
+#
+# 4. Start only UI:
+#    docker-compose up -d ui
+#
+# 5. Start with nginx:
+#    docker-compose --profile with-nginx up -d
+#
+# 6. View logs:
+#    docker-compose logs -f
+#
+# 7. Stop services:
+#    docker-compose down
+# =============================================================================

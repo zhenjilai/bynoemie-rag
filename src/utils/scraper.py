@@ -11,16 +11,25 @@ import time
 from typing import List, Dict, Any, Set
 import re
 from datetime import datetime
+import os
+from urllib.parse import urlparse
 
 
 class FullAutoScraper:
-    def __init__(self):
+    def __init__(self, download_images: bool = True, max_images_per_product: int = 3):
         self.base_url = "https://bynoemie.com.my"
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         self.all_product_handles = set()
+        self.download_images = download_images
+        self.max_images_per_product = max_images_per_product
+        self.images_folder = 'data/products/images'
+        
+        # Create images folder if downloading images
+        if self.download_images:
+            os.makedirs(self.images_folder, exist_ok=True)
         
     def discover_collections(self) -> List[str]:
         """
@@ -143,6 +152,40 @@ class FullAutoScraper:
         
         return unique_list
     
+    def download_product_image(self, image_url: str, product_handle: str, image_index: int) -> str:
+        """
+        Download a product image and save it locally
+        Returns the local file path
+        """
+        try:
+            # Parse the URL to get the file extension
+            parsed_url = urlparse(image_url)
+            # Get extension from URL, default to .jpg
+            ext = os.path.splitext(parsed_url.path)[1] or '.jpg'
+            
+            # Create filename: producthandle_1.jpg, producthandle_2.jpg, etc.
+            filename = f"{product_handle}_{image_index}{ext}"
+            filepath = os.path.join(self.images_folder, filename)
+            
+            # Skip if already downloaded
+            if os.path.exists(filepath):
+                return filepath
+            
+            # Download the image
+            response = self.session.get(image_url, timeout=30, stream=True)
+            response.raise_for_status()
+            
+            # Save the image
+            with open(filepath, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            return filepath
+            
+        except Exception as e:
+            print(f"    ⚠ Error downloading image {image_index} for {product_handle}: {e}")
+            return None
+    
     def extract_product_info(self, product: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract and format product information
@@ -198,6 +241,18 @@ class FullAutoScraper:
         # Get product images
         images = [img.get('src') for img in product.get('images', [])]
         
+        # Download images if enabled
+        local_image_paths = []
+        if self.download_images and images:
+            product_handle = product.get('handle')
+            print(f"    Downloading images for {product_handle}...")
+            
+            # Download up to max_images_per_product
+            for i, img_url in enumerate(images[:self.max_images_per_product], 1):
+                local_path = self.download_product_image(img_url, product_handle, i)
+                if local_path:
+                    local_image_paths.append(local_path)
+        
         # Get collection info
         collection = product.get('_collections', product.get('_source_collection', 'N/A'))
         
@@ -224,9 +279,12 @@ class FullAutoScraper:
             'price_currency': 'MYR',
             'product_link': f"{self.base_url}/products/{product.get('handle')}",
             'product_description': self._clean_html(product.get('body_html', '')),
-            'image_1': images[0] if len(images) > 0 else '',
-            'image_2': images[1] if len(images) > 1 else '',
-            'image_3': images[2] if len(images) > 2 else '',
+            'image_url_1': images[0] if len(images) > 0 else '',
+            'image_url_2': images[1] if len(images) > 1 else '',
+            'image_url_3': images[2] if len(images) > 2 else '',
+            'local_image_1': local_image_paths[0] if len(local_image_paths) > 0 else '',
+            'local_image_2': local_image_paths[1] if len(local_image_paths) > 1 else '',
+            'local_image_3': local_image_paths[2] if len(local_image_paths) > 2 else '',
             'total_images': len(images),
             'tags': ', '.join(product.get('tags', [])),
             'created_at': product.get('created_at'),
@@ -292,9 +350,9 @@ class FullAutoScraper:
         
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f'data/bynoemie_all_products_{timestamp}.csv'
-        elif not filename.startswith('data/'):
-            filename = f'data/{filename}'
+            filename = f'data/products/bynoemie_all_products_{timestamp}.csv'
+        elif not filename.startswith('data/products/'):
+            filename = f'data/products/{filename}'
         
         fieldnames = list(products[0].keys())
         
@@ -316,9 +374,9 @@ class FullAutoScraper:
         
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f'data/bynoemie_all_products_{timestamp}.json'
-        elif not filename.startswith('data/'):
-            filename = f'data/{filename}'
+            filename = f'data/products/bynoemie_all_products_{timestamp}.json'
+        elif not filename.startswith('data/products/'):
+            filename = f'data/products/{filename}'
         
         with open(filename, 'w', encoding='utf-8') as jsonfile:
             json.dump(products, jsonfile, indent=2, ensure_ascii=False)
@@ -368,6 +426,10 @@ class FullAutoScraper:
         print(f"Products out of stock: {sum(1 for p in formatted_products if p['stock_availability'] == 'Out of Stock')}")
         print(f"Products on sale: {sum(1 for p in formatted_products if p['on_sale'] == 'Yes')}")
         
+        if self.download_images:
+            total_images = sum(1 for p in formatted_products for i in [1, 2, 3] if p.get(f'local_image_{i}'))
+            print(f"Images downloaded: {total_images} (saved to {self.images_folder}/)")
+        
         if formatted_products:
             prices = [p['price_min'] for p in formatted_products if p['price_min'] > 0]
             if prices:
@@ -383,13 +445,16 @@ def main():
     """
     Main execution function
     """
-    scraper = FullAutoScraper()
+    # Set download_images=True to download product images
+    # Set max_images_per_product to control how many images per product (default: 3)
+    scraper = FullAutoScraper(download_images=True, max_images_per_product=3)
     products, csv_file, json_file = scraper.scrape_all()
     
     print("\n✅ SCRAPING COMPLETED SUCCESSFULLY!")
     print(f"\nYour files are ready:")
     print(f"  📄 CSV: {csv_file}")
     print(f"  📄 JSON: {json_file}")
+    print(f"  🖼️  Images: data/products/images/ folder")
     print(f"\nTotal products: {len(products)}")
 
 
