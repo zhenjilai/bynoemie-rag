@@ -25,39 +25,6 @@ import random
 import uuid
 
 # =============================================================================
-# CONFIGURATION - Easy to adjust settings
-# =============================================================================
-class Config:
-    """Configuration for the chatbot - adjust these for tuning"""
-    
-    # Feature Flags
-    USE_RERANKING = True              # Enable LLM re-ranking for better relevancy
-    USE_LLM_QUERY_UNDERSTANDING = True # Enable query analysis before search
-    
-    # History Settings (for retail chatbot)
-    HISTORY_MESSAGES_FOR_INTENT = 50  # Full conversation history (50 msg limit)
-    
-    # Search Settings
-    TOP_K_RESULTS = 8
-    MIN_RELEVANCE_SCORE = 5
-    
-    # Scoring Weights
-    SCORE_WEIGHTS = {
-        'exact_name_match': 100,
-        'partial_name_match': 40,
-        'subcategory_match': 50,
-        'category_match': 40,
-        'material_match': 25,
-        'occasion_match': 35,
-        'vibe_match': 30,
-        'color_match': 20,
-        'description_match': 10,
-        'mismatch_penalty': -50,
-    }
-
-config = Config()
-
-# =============================================================================
 # PAGE CONFIG
 # =============================================================================
 st.set_page_config(
@@ -315,16 +282,43 @@ def save_feedback(
 
 
 # =============================================================================
-# ORDER & POLICY MANAGERS
+# ORDER & USER DATABASE MANAGERS
 # =============================================================================
+def get_user_manager():
+    """Get UserManager instance for user data operations"""
+    if 'user_manager' not in st.session_state:
+        try:
+            from src.data_manager import UserManager
+            st.session_state.user_manager = UserManager()
+        except ImportError as e:
+            print(f"UserManager import error: {e}")
+            st.session_state.user_manager = None
+    return st.session_state.user_manager
+
+
 def get_order_manager():
+    """Get OrderManager instance for order operations"""
     if 'order_manager' not in st.session_state:
         try:
-            from src.orders import OrderManager
-            st.session_state.order_manager = OrderManager()
+            from src.data_manager import OrderManager, UserManager
+            user_mgr = get_user_manager()
+            st.session_state.order_manager = OrderManager(user_mgr)
         except ImportError as e:
+            print(f"OrderManager import error: {e}")
             st.session_state.order_manager = None
     return st.session_state.order_manager
+
+
+def get_database_manager():
+    """Get combined DatabaseManager for easy access"""
+    if 'db_manager' not in st.session_state:
+        try:
+            from src.data_manager import DatabaseManager
+            st.session_state.db_manager = DatabaseManager()
+        except ImportError as e:
+            print(f"DatabaseManager import error: {e}")
+            st.session_state.db_manager = None
+    return st.session_state.db_manager
 
 
 def get_policy_rag():
@@ -365,48 +359,65 @@ def llm_classify_intent(
 ) -> Dict:
     """
     Use OpenAI to classify intent WITH FULL CHAT HISTORY.
-    Improved: Shorter prompt, full history (50 msgs), better context handling.
+    Passes entire conversation context for accurate understanding.
     """
     client = get_openai_client()
     
     if not client:
         return fallback_classify(query, product_names, current_product)
     
-    # IMPROVED: Shorter, focused prompt
-    system_prompt = """Classify the user's intent. Return JSON only.
+    # Build system prompt
+    system_prompt = """You are an intent classifier for ByNoemie fashion boutique chatbot.
 
-You have access to the FULL conversation history. Use it to understand context.
+You will receive the FULL CONVERSATION HISTORY. Use it to understand context.
+If user says "this", "it", "that", "the item" - identify which product they're referring to from the conversation.
+
+IMPORTANT: This is a FASHION BOUTIQUE chatbot. It should ONLY answer questions about:
+- Products (dresses, jumpsuits, heels, bags, etc.)
+- Stock availability
+- Prices
+- Store policies (shipping, refund, terms)
+- Fashion recommendations
+- Orders (create, modify, cancel, track)
+- Customer profile
+
+ANY question NOT related to fashion/products/store should be classified as OFF_TOPIC.
 
 INTENTS:
 - GREETING: Hello, hi, hey
-- RECOMMENDATION: Show me, recommend, looking for, browse [category]
-- STOCK_CHECK: In stock, available, do you have
-- PRODUCT_INFO: Tell me about, what color, what size, what material, describe
+- RECOMMENDATION: Show me, recommend, suggest, looking for, browse category
+- STOCK_CHECK: In stock, available, sizes, do you have
+- PRODUCT_INFO: Tell me about, what color, what material, describe
 - PRICE_CHECK: How much, price, cost
-- POLICY_QUESTION: Return, refund, shipping, delivery, exchange
-- ORDER_CREATE: Order, buy, purchase
-- ORDER_CANCEL: Cancel order
+- POLICY_QUESTION: Returns, refunds, shipping, terms
+- ORDER_CREATE: I want to order, buy, purchase, place order
+- ORDER_MODIFY: Change my order, modify order, update size/color/quantity
+- ORDER_CANCEL: Cancel order, delete order, remove order
+- ORDER_TRACK: Track order, where is my order, order status, check order
+- ORDER_CONFIRM: User types exactly "ORDER", "DELETE", or "CHANGE" to confirm
+- USER_PROFILE: My profile, my account, my info, customer info, update address
 - END_CONVERSATION: Goodbye, bye
 - THANKS: Thank you
 - OFF_TOPIC: Not fashion/shopping related
 - GENERAL: Other fashion questions
 
-RULES:
-- "this", "it", "that", "the first one" = refer to products from conversation history
-- Category words (shoes, dresses, bags) without specific product = RECOMMENDATION
-- Questions about color/size/material/price = PRODUCT_INFO
+IMPORTANT RULES:
+1. If user types EXACTLY "ORDER", "DELETE", or "CHANGE" (case-insensitive) -> ORDER_CONFIRM
+2. Order IDs look like "ORD-001", "ORD-002", etc. Extract them if mentioned.
+3. If user refers to "this dress", "it" -> find product from conversation context
+4. For order actions, extract order_id if user mentions it
 
-PRODUCTS: {}
-CURRENT PRODUCT: {}
+AVAILABLE PRODUCTS: {}
 
-Return: {{"intent": "...", "product_mentioned": "..." or null, "size": "..." or null, "color": "..." or null}}""".format(', '.join(product_names[:25]), current_product or 'None')
+Return ONLY JSON:
+{{"intent": "INTENT_NAME", "product_mentioned": "product name or null", "size": "size or null", "color": "color or null", "order_id": "ORD-XXX or null", "confirm_type": "ORDER/DELETE/CHANGE or null"}}""".format(', '.join(product_names[:20]))
 
-    # IMPROVED: Use FULL chat history (50 messages) for retail chatbot
+    # Build messages with full chat history
     messages = [{"role": "system", "content": system_prompt}]
     
+    # Add chat history for context (last 10 messages max)
     if chat_history:
-        # Full history with safety limit of 50 messages
-        recent_history = chat_history[-50:]
+        recent_history = chat_history[-10:]
         for msg in recent_history:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -429,9 +440,6 @@ Return: {{"intent": "...", "product_mentioned": "..." or null, "size": "..." or 
         json_match = re.search(r'\{.*\}', result, re.DOTALL)
         if json_match:
             parsed = json.loads(json_match.group())
-            # Handle pronoun references
-            if parsed.get('product_mentioned') in ['this', 'it', 'that', 'this one', 'the item']:
-                parsed['product_mentioned'] = current_product
             return parsed
         return {"intent": "GENERAL"}
     except Exception as e:
@@ -522,33 +530,62 @@ def fallback_classify(query: str, product_names: List[str], current_product: Opt
     # Check if asking about specific product attributes
     is_attribute_question = any(attr in q for attr in attribute_questions)
     
-    # Determine intent
-    if any(g in q for g in ['bye', 'goodbye', 'end chat']):
+    # Extract order ID if mentioned (e.g., ORD-001, ord-002)
+    import re
+    order_id_match = re.search(r'ord-?\d{3}', q, re.IGNORECASE)
+    if order_id_match:
+        order_id = order_id_match.group().upper()
+        if 'ORD' in order_id and '-' not in order_id:
+            order_id = order_id.replace('ORD', 'ORD-')
+        result["order_id"] = order_id
+    
+    # Check for exact confirmation keywords (case-insensitive)
+    q_stripped = query.strip().upper()
+    
+    # Determine intent - ORDER CONFIRMATIONS FIRST
+    if q_stripped == "ORDER":
+        result["intent"] = "ORDER_CONFIRM"
+        result["confirm_type"] = "ORDER"
+    elif q_stripped == "DELETE":
+        result["intent"] = "ORDER_CONFIRM"
+        result["confirm_type"] = "DELETE"
+    elif q_stripped == "CHANGE":
+        result["intent"] = "ORDER_CONFIRM"
+        result["confirm_type"] = "CHANGE"
+    elif any(g in q for g in ['bye', 'goodbye', 'end chat']):
         result["intent"] = "END_CONVERSATION"
-    elif any(g in q for g in ['hello', 'hi', 'hey']):
+    elif any(g in q for g in ['hello', 'hi', 'hey']) and len(q.split()) < 5:
         result["intent"] = "GREETING"
-    elif any(p in q for p in ['return', 'refund', 'exchange', 'shipping', 'policy', 'delivery', 'how long']):
+    elif any(p in q for p in ['return policy', 'refund', 'exchange policy', 'shipping policy', 'delivery time']):
         result["intent"] = "POLICY_QUESTION"
+    # Order tracking - check before other order intents
+    elif any(t in q for t in ['track order', 'track my order', 'where is my order', 'order status', 'check order', 'check my order']):
+        result["intent"] = "ORDER_TRACK"
+    # Order cancellation
+    elif any(c in q for c in ['cancel order', 'cancel my order', 'delete order', 'remove order']):
+        result["intent"] = "ORDER_CANCEL"
+    # Order modification
+    elif any(m in q for m in ['change order', 'change my order', 'modify order', 'update order', 'edit order']):
+        result["intent"] = "ORDER_MODIFY"
+    # Order creation - must have product context
+    elif any(o in q for o in ['i want to order', 'like to order', 'would like to order', 'place order', 'buy this', 'purchase']) and (product_mentioned or refers_to_current):
+        result["intent"] = "ORDER_CREATE"
+    # User profile
+    elif any(u in q for u in ['my profile', 'my account', 'my info', 'my address', 'update profile', 'customer info']):
+        result["intent"] = "USER_PROFILE"
     elif is_attribute_question:
-        # Specific attribute questions go to PRODUCT_INFO
         result["intent"] = "PRODUCT_INFO"
     elif any(s in q for s in ['in stock', 'available', 'do you have']) and not is_category_query:
         result["intent"] = "STOCK_CHECK"
-    elif 'cancel' in q and 'order' in q:
-        result["intent"] = "ORDER_CANCEL"
-    elif any(o in q for o in ['order', 'buy', 'purchase']) and not is_category_query:
-        result["intent"] = "ORDER_CREATE"
     elif any(p in q for p in ['how much', 'price', 'cost']) and is_fashion_related:
         result["intent"] = "PRICE_CHECK"
     elif any(i in q for i in ['tell me about', 'what is', 'describe']) and product_mentioned:
         result["intent"] = "PRODUCT_INFO"
     elif is_category_query or any(r in q for r in ['recommend', 'suggest', 'show me', 'looking for', 'show', 'what do you have', 'browse']):
-        # Category queries and recommendation requests go to RECOMMENDATION
         result["intent"] = "RECOMMENDATION"
     elif any(t in q for t in ['thank', 'thanks']):
         result["intent"] = "THANKS"
     elif not is_fashion_related:
-        # If not fashion related, mark as OFF_TOPIC
         result["intent"] = "OFF_TOPIC"
     else:
         result["intent"] = "GENERAL"
@@ -843,21 +880,7 @@ def search_products(query: str, products: List[Dict], n: int = 8, query_understa
         if material_filtered:
             filtered_products = material_filtered
     
-    # === SCORE PRODUCTS - IMPROVED WITH WEIGHTED SCORING ===
-    # Scoring weights for better relevancy
-    SCORE_WEIGHTS = {
-        'exact_name_match': 100,
-        'partial_name_match': 40,
-        'subcategory_match': 50,
-        'category_match': 40,
-        'material_match': 25,
-        'occasion_match': 35,
-        'vibe_match': 30,
-        'color_match': 20,
-        'description_match': 10,
-        'mismatch_penalty': -50,  # Penalty for wrong category
-    }
-    
+    # === SCORE PRODUCTS ===
     scored = []
     for p in filtered_products:
         score = 0
@@ -866,7 +889,6 @@ def search_products(query: str, products: List[Dict], n: int = 8, query_understa
         name = p.get('product_name', '').lower()
         ptype = p.get('product_type', '').lower()
         subcat = p.get('subcategory', '').lower()
-        category = p.get('category', '').lower()
         vibes = ' '.join(p.get('vibe_tags', [])).lower()
         mood = p.get('mood_summary', '').lower()
         ideal = p.get('ideal_for', '').lower()
@@ -874,69 +896,44 @@ def search_products(query: str, products: List[Dict], n: int = 8, query_understa
         occasions = ' '.join(p.get('occasions', [])).lower()
         colors = ' '.join(p.get('colors', [])).lower()
         
-        # IMPROVED: Exact name match (highest priority)
-        if q in name or name in q:
-            score += SCORE_WEIGHTS['exact_name_match']
-        
-        # Partial name match
         for w in expanded_words:
             w = w.lower()
-            if len(w) >= 3 and w in name:
-                score += SCORE_WEIGHTS['partial_name_match']
+            if w in name: score += 20
+            if w in subcat: score += 18
+            if w in ptype: score += 15
+            if w in materials: score += 15
+            if w in vibes: score += 12
+            if w in occasions: score += 10
+            if w in mood: score += 8
+            if w in ideal: score += 8
+            if w in colors: score += 5
         
-        # Subcategory match
+        # Boost for category/subcategory match
+        if target_category and p.get('category', '').lower() == target_category.lower():
+            score += 25
         if target_subcategories:
             for sc in target_subcategories:
                 if sc.lower() in subcat or sc.lower() in ptype:
-                    score += SCORE_WEIGHTS['subcategory_match']
+                    score += 30
         
-        # Category match
-        if target_category and target_category.lower() in category:
-            score += SCORE_WEIGHTS['category_match']
-        
-        # Material match
+        # Boost for material match
         if target_materials:
             for mat in target_materials:
                 if mat.lower() in materials:
-                    score += SCORE_WEIGHTS['material_match']
+                    score += 20
                 if mat == 'sequin' and p.get('has_embellishment'):
-                    score += SCORE_WEIGHTS['material_match']
+                    score += 20
         
-        # Occasion match
+        # Boost for occasion match
         if target_occasions:
             for occ in target_occasions:
                 if occ.lower() in occasions or occ.lower() in ideal:
-                    score += SCORE_WEIGHTS['occasion_match']
-        
-        # Vibe/style match
-        if target_vibes:
-            for vibe in target_vibes:
-                if vibe.lower() in vibes:
-                    score += SCORE_WEIGHTS['vibe_match']
-        
-        # Keyword matches in other fields
-        for w in expanded_words:
-            w = w.lower()
-            if len(w) >= 3:
-                if w in vibes: score += 12
-                if w in mood: score += SCORE_WEIGHTS['description_match']
-                if w in ideal: score += SCORE_WEIGHTS['description_match']
-                if w in colors: score += SCORE_WEIGHTS['color_match']
-        
-        # IMPROVED: Category mismatch PENALTY
-        if target_category and strict_category_mode:
-            is_category_match = target_category.lower() in category
-            if not is_category_match:
-                # Check product_type as fallback
-                if target_category == "Footwear" and not any(ft in ptype for ft in ['heel', 'sandal', 'shoe']):
-                    score += SCORE_WEIGHTS['mismatch_penalty']
-                elif target_category == "Accessories" and not any(acc in ptype for acc in ['bag', 'clutch']):
-                    score += SCORE_WEIGHTS['mismatch_penalty']
-                elif target_category == "Clothing" and not any(cl in ptype for cl in ['dress', 'jumpsuit', 'top']):
-                    score += SCORE_WEIGHTS['mismatch_penalty']
+                    score += 15
         
         # In strict category mode, include all filtered products (even with score 0)
+        # In non-strict mode, only include if score > 0
         if strict_category_mode:
+            # Give minimum score of 1 so all filtered products are included
             scored.append((p, max(score, 1)))
         elif score > 0:
             scored.append((p, score))
@@ -946,87 +943,7 @@ def search_products(query: str, products: List[Dict], n: int = 8, query_understa
         return filtered_products[:n]
     
     scored.sort(key=lambda x: x[1], reverse=True)
-    
-    # IMPROVED: Re-rank top results with LLM for better relevancy
-    top_results = [p[0] for p in scored[:n * 2]]  # Get more for re-ranking
-    
-    if len(top_results) > 3:
-        top_results = rerank_results(query, top_results)
-    
-    return top_results[:n]
-
-
-def rerank_results(query: str, products: List[Dict]) -> List[Dict]:
-    """
-    IMPROVED: Re-rank search results using LLM for better relevancy.
-    Only called when we have multiple results to compare.
-    Can be disabled via config.USE_RERANKING = False
-    """
-    # Check if re-ranking is enabled
-    if not config.USE_RERANKING:
-        return products
-    
-    client = get_openai_client()
-    
-    if not client or len(products) <= 2:
-        return products
-    
-    # Build product list for prompt
-    products_list = []
-    for i, p in enumerate(products[:10]):  # Limit to 10 for re-ranking
-        name = p.get('product_name', 'Unknown')
-        vibes = ', '.join(p.get('vibe_tags', [])[:3])
-        category = p.get('category', p.get('product_type', ''))
-        occasion = ', '.join(p.get('occasions', [])[:2])
-        products_list.append("{}: {} ({}) - {}. Good for: {}".format(i, name, category, vibes, occasion))
-    
-    prompt = """Given the customer's query, rank these products from most to least relevant.
-
-QUERY: "{}"
-
-PRODUCTS:
-{}
-
-Consider:
-- How well does the product match the query intent?
-- Category match (shoes for shoes query, dresses for dress query)
-- Occasion/style match
-- Specific features mentioned
-
-Return JSON only: {{"ranking": [indices in order of relevance]}}""".format(query, '\n'.join(products_list))
-    
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Re-rank products by relevance. Return JSON only."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=100,
-            temperature=0.1
-        )
-        
-        result = response.choices[0].message.content
-        import re
-        json_match = re.search(r'\{.*\}', result, re.DOTALL)
-        if json_match:
-            parsed = json.loads(json_match.group())
-            if 'ranking' in parsed:
-                reranked = []
-                for idx in parsed['ranking']:
-                    if isinstance(idx, int) and 0 <= idx < len(products):
-                        reranked.append(products[idx])
-                
-                # Add any products not in ranking
-                for p in products:
-                    if p not in reranked:
-                        reranked.append(p)
-                
-                return reranked
-    except Exception as e:
-        print("Re-ranking error: {}".format(e))
-    
-    return products
+    return [p[0] for p in scored[:n]]
 
 
 def find_product(name: str, products: List[Dict]) -> Optional[Dict]:
@@ -1330,6 +1247,301 @@ def main():
                     response = "Which product would you like me to check? Please mention the name."
                     response_placeholder.markdown(response)
             
+            # === ORDER CONFIRM (User types ORDER/DELETE/CHANGE) ===
+            elif intent == "ORDER_CONFIRM":
+                confirm_type = intent_result.get('confirm_type', '')
+                pending = st.session_state.get('pending_order_action')
+                
+                if confirm_type == "ORDER" and pending and pending.get('action') == 'create':
+                    # Complete order creation
+                    order_manager = get_order_manager()
+                    if order_manager:
+                        order_data = pending.get('data', {})
+                        user_id = st.session_state.get('current_user_id', 'USR-001')
+                        
+                        order = order_manager.create_order(
+                            user_id=user_id,
+                            product=order_data.get('product', {}),
+                            size=order_data.get('size', 'M'),
+                            color=order_data.get('color', 'Default'),
+                            quantity=order_data.get('quantity', 1)
+                        )
+                        
+                        response = f"""✅ **Order Confirmed!**
+
+Your order has been placed successfully!
+
+{order_manager.format_order_summary(order)}
+
+📧 You will receive a confirmation email shortly.
+📦 Estimated delivery: {order['estimated_delivery']}
+
+Thank you for shopping with ByNoemie! 💕"""
+                        st.session_state.pending_order_action = None
+                    else:
+                        response = "Sorry, order system is temporarily unavailable."
+                    response_placeholder.markdown(response)
+                    
+                elif confirm_type == "DELETE" and pending and pending.get('action') == 'cancel':
+                    # Complete order cancellation
+                    order_manager = get_order_manager()
+                    if order_manager:
+                        order_id = pending.get('order_id')
+                        success, message, order = order_manager.cancel_order(order_id)
+                        
+                        if success:
+                            response = f"""✅ **Order Cancelled**
+
+{message}
+
+Your refund will be processed within 3-5 business days.
+
+Is there anything else I can help you with?"""
+                        else:
+                            response = f"❌ {message}"
+                    else:
+                        response = "Sorry, order system is temporarily unavailable."
+                    response_placeholder.markdown(response)
+                    st.session_state.pending_order_action = None
+                    
+                elif confirm_type == "CHANGE" and pending and pending.get('action') == 'modify':
+                    # Complete order modification
+                    order_manager = get_order_manager()
+                    if order_manager:
+                        order_id = pending.get('order_id')
+                        changes = pending.get('changes', {})
+                        
+                        success, message, order = order_manager.modify_order(
+                            order_id,
+                            new_size=changes.get('size'),
+                            new_color=changes.get('color'),
+                            new_quantity=changes.get('quantity')
+                        )
+                        
+                        if success:
+                            response = f"""✅ **Order Modified**
+
+Changes applied:
+{message}
+
+**Updated Order:**
+{order_manager.format_order_summary(order)}
+
+Is there anything else I can help you with?"""
+                        else:
+                            response = f"❌ {message}"
+                    else:
+                        response = "Sorry, order system is temporarily unavailable."
+                    response_placeholder.markdown(response)
+                    st.session_state.pending_order_action = None
+                else:
+                    response = "I don't have a pending action to confirm. How can I help you?"
+                    response_placeholder.markdown(response)
+            
+            # === ORDER CREATE ===
+            elif intent == "ORDER_CREATE":
+                order_manager = get_order_manager()
+                
+                if product and order_manager:
+                    size_to_order = size_mentioned or 'M'
+                    color_to_order = color_mentioned or product.get('colors_available', 'Default').split(',')[0].strip()
+                    
+                    # Store pending order
+                    st.session_state.pending_order_action = {
+                        'action': 'create',
+                        'data': {
+                            'product': product,
+                            'size': size_to_order,
+                            'color': color_to_order,
+                            'quantity': 1
+                        }
+                    }
+                    
+                    response = f"""📝 **Order Summary**
+
+• **Product:** {product.get('product_name')}
+• **Size:** {size_to_order}
+• **Color:** {color_to_order}
+• **Quantity:** 1
+• **Price:** {product.get('price_currency', 'MYR')} {product.get('price_min', 0):.2f}
+
+⚠️ **To confirm your order, please type:** `ORDER`
+
+_Type anything else to cancel._"""
+                    response_placeholder.markdown(response)
+                    show_products = [product]
+                else:
+                    response = """I'd love to help you place an order! 
+
+Could you please specify:
+• Which product you'd like to order
+• Size preference
+• Color preference
+
+For example: "I want to order the Luna Dress in size M, White" """
+                    response_placeholder.markdown(response)
+            
+            # === ORDER CANCEL ===
+            elif intent == "ORDER_CANCEL":
+                order_manager = get_order_manager()
+                order_id = intent_result.get('order_id')
+                
+                if order_manager:
+                    if order_id:
+                        can_cancel, reason = order_manager.can_cancel_order(order_id)
+                        order = order_manager.get_order(order_id)
+                        
+                        if can_cancel and order:
+                            st.session_state.pending_order_action = {
+                                'action': 'cancel',
+                                'order_id': order_id
+                            }
+                            
+                            response = f"""🗑️ **Cancel Order Request**
+
+{order_manager.format_order_summary(order)}
+
+⚠️ **Are you sure you want to cancel this order?**
+
+**To confirm cancellation, please type:** `DELETE`
+
+_Type anything else to keep the order._"""
+                        else:
+                            response = f"❌ {reason}"
+                        response_placeholder.markdown(response)
+                    else:
+                        recent = order_manager.get_recent_orders(5)
+                        if recent:
+                            orders_list = '\n'.join([
+                                f"• **{o['order_id']}** - {o['product_name']} ({o['status'].replace('_', ' ').title()})"
+                                for o in recent
+                            ])
+                            response = f"""Which order would you like to cancel?
+
+**Your Recent Orders:**
+{orders_list}
+
+Please specify the order ID (e.g., "Cancel order ORD-001")"""
+                        else:
+                            response = "You don't have any orders yet."
+                        response_placeholder.markdown(response)
+                else:
+                    response = "Sorry, order system is temporarily unavailable."
+                    response_placeholder.markdown(response)
+            
+            # === ORDER MODIFY ===
+            elif intent == "ORDER_MODIFY":
+                order_manager = get_order_manager()
+                order_id = intent_result.get('order_id')
+                
+                if order_manager:
+                    if order_id:
+                        can_modify, reason = order_manager.can_modify_order(order_id)
+                        order = order_manager.get_order(order_id)
+                        
+                        if can_modify and order:
+                            new_size = size_mentioned
+                            new_color = color_mentioned
+                            
+                            if new_size or new_color:
+                                st.session_state.pending_order_action = {
+                                    'action': 'modify',
+                                    'order_id': order_id,
+                                    'changes': {'size': new_size, 'color': new_color}
+                                }
+                                
+                                changes_text = []
+                                if new_size:
+                                    changes_text.append(f"Size: {order['size']} → {new_size}")
+                                if new_color:
+                                    changes_text.append(f"Color: {order['color']} → {new_color}")
+                                
+                                response = f"""✏️ **Modify Order Request**
+
+**Order:** {order_id}
+**Product:** {order['product_name']}
+
+**Requested Changes:**
+• {chr(10).join(['• ' + c for c in changes_text[1:]]) if len(changes_text) > 1 else changes_text[0] if changes_text else 'None'}
+
+⚠️ **To confirm changes, please type:** `CHANGE`
+
+_Type anything else to cancel._"""
+                            else:
+                                response = f"""What would you like to change for order {order_id}?
+
+**Current Order:**
+{order_manager.format_order_summary(order)}
+
+You can change: Size, Color, or Quantity
+Example: "Change order {order_id} to size L" """
+                        else:
+                            response = f"❌ {reason}"
+                        response_placeholder.markdown(response)
+                    else:
+                        recent = order_manager.get_recent_orders(5)
+                        modifiable = [o for o in recent if o['status'] in ['pending_confirmation', 'confirmed', 'processing']]
+                        
+                        if modifiable:
+                            orders_list = '\n'.join([
+                                f"• **{o['order_id']}** - {o['product_name']} (Size: {o['size']}, Color: {o['color']})"
+                                for o in modifiable
+                            ])
+                            response = f"""Which order would you like to modify?
+
+**Orders that can be modified:**
+{orders_list}
+
+Example: "Change order ORD-002 to size L" """
+                        else:
+                            response = "You don't have any orders that can be modified. Orders that have been shipped cannot be changed."
+                        response_placeholder.markdown(response)
+                else:
+                    response = "Sorry, order system is temporarily unavailable."
+                    response_placeholder.markdown(response)
+            
+            # === ORDER TRACK ===
+            elif intent == "ORDER_TRACK":
+                order_manager = get_order_manager()
+                order_id = intent_result.get('order_id')
+                
+                if order_manager:
+                    if order_id:
+                        response = order_manager.track_order(order_id)
+                    else:
+                        recent = order_manager.get_recent_orders(5)
+                        if recent:
+                            response = "📦 **Your Recent Orders:**\n\n"
+                            for order in recent:
+                                status_emoji = {"pending_confirmation": "⏳", "confirmed": "✅", 
+                                               "processing": "📋", "shipped": "🚚", 
+                                               "delivered": "🎉", "cancelled": "❌"}
+                                emoji = status_emoji.get(order['status'], "📦")
+                                response += f"{emoji} **{order['order_id']}** - {order['product_name']}\n"
+                                response += f"   Status: {order['status'].replace('_', ' ').title()}\n\n"
+                            response += "_Say 'Track order ORD-XXX' for details._"
+                        else:
+                            response = "You don't have any orders yet. Would you like to browse our collection?"
+                    response_placeholder.markdown(response)
+                else:
+                    response = "Sorry, order system is temporarily unavailable."
+                    response_placeholder.markdown(response)
+            
+            # === USER PROFILE ===
+            elif intent == "USER_PROFILE":
+                user_manager = get_user_manager()
+                user_id = st.session_state.get('current_user_id', 'USR-001')
+                
+                if user_manager:
+                    user = user_manager.get_user(user_id)
+                    if user:
+                        response = user_manager.format_user_profile(user)
+                    else:
+                        response = "User profile not found. Please contact customer service."
+                else:
+                    response = "Sorry, profile system is temporarily unavailable."
+                response_placeholder.markdown(response)
+            
             # === RECOMMENDATION ===
             elif intent == "RECOMMENDATION":
                 # Use LLM to understand what user wants
@@ -1370,7 +1582,7 @@ def main():
                         category_requested = cat_name
                         break
                 
-                # Search with understanding and RE-RANKING
+                # Search with understanding - use 10 products for broad queries
                 max_results = 10 if is_broad_query else 8
                 results = search_products(query, products, max_results, query_understanding)
                 
@@ -1378,33 +1590,23 @@ def main():
                     # Get product types found for better response
                     types_found = list(set([p.get('product_type', '') for p in results]))
                     subcats_found = list(set([p.get('subcategory', '') for p in results if p.get('subcategory')]))
-                    
-                    # IMPROVED: Format products with more details
-                    products_info = '\n'.join([
-                        "{}. {} ({} {}) - {}. Good for: {}".format(
-                            i+1,
-                            p.get('product_name', ''),
-                            p.get('price_currency', 'MYR'),
-                            p.get('price_min', 0),
-                            ', '.join(p.get('vibe_tags', [])[:3]),
-                            ', '.join(p.get('occasions', [])[:2]) or 'Any occasion'
-                        )
-                        for i, p in enumerate(results[:5])
-                    ])
+                    ctx = ', '.join([p.get('product_name', '') for p in results[:5]])
                     
                     if is_broad_query and client:
                         # For broad queries, show products AND ask follow-up
                         follow_up_prompt = """You're a fashion stylist. The customer asked for "{}" and we found {} options.
 
-Products found:
-{}
+Products found: {}
 
 Write a SHORT response (2-3 sentences) that:
 1. Shows enthusiasm about the options
 2. Mentions 1-2 specific product names
-3. Asks ONE helpful follow-up question about occasion, style, or features
+3. Asks ONE helpful follow-up question about:
+   - What occasion they're shopping for (party, work, dinner, wedding)
+   - OR what style they prefer (elegant, bold, minimalist)
+   - OR what heel height/comfort level they want (for shoes)
 
-Be conversational, not robotic. No bullet points.""".format(query, len(results), products_info)
+Be conversational, not robotic.""".format(query, len(results), ctx)
                         
                         messages = [
                             {"role": "system", "content": follow_up_prompt},
@@ -1412,22 +1614,9 @@ Be conversational, not robotic. No bullet points.""".format(query, len(results),
                         ]
                         response = stream_response(client, messages, response_placeholder)
                     elif client:
-                        # IMPROVED: Better recommendation prompt
-                        rec_prompt = """You're ByNoemie's fashion stylist. Customer asked: "{}"
-
-Products found:
-{}
-
-Write a SHORT response (2-3 sentences):
-1. Name 1-2 TOP products that best match their query
-2. Explain WHY each matches (mention specific feature like vibe, occasion, or material)
-3. Be warm and conversational, no bullet points
-
-Example: "The Luna Dress would be perfect for your romantic dinner - its flowing silk silhouette is incredibly elegant. If you prefer something bolder, the Starlight Dress adds just the right sparkle!" """.format(query, products_info)
-                        
                         messages = [
-                            {"role": "system", "content": rec_prompt},
-                            {"role": "user", "content": query}
+                            {"role": "system", "content": "Fashion stylist. SHORT rec (2 sentences). Mention specific product names from the list."},
+                            {"role": "user", "content": "Query: {}\nProducts found ({}): {}".format(query, ', '.join(types_found), ctx)}
                         ]
                         response = stream_response(client, messages, response_placeholder)
                     

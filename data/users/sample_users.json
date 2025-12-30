@@ -1,0 +1,140 @@
+{
+  "description": "Sample users for ByNoemie Fashion Assistant Demo",
+  "users": [
+    {
+      "user_id": "USR-001",
+      "name": "Sarah Chen",
+      "email": "sarah.chen@email.com",
+      "phone": "+60 12-345 6789",
+      "gender": "Female",
+      "birthday": "1995-03-15",
+      "age": 29,
+      "address": {
+        "street": "123 Fashion Avenue",
+        "city": "Kuala Lumpur",
+        "state": "Wilayah Persekutuan",
+        "postcode": "50450",
+        "country": "Malaysia"
+      },
+      "registered_at": "2023-12-30T10:30:00",
+      "membership_tier": "Gold",
+      "preferences": {
+        "preferred_size": "S",
+        "preferred_style": ["Elegant", "Romantic"],
+        "preferred_colors": ["Black", "White", "Pink"],
+        "shoe_size": "37"
+      },
+      "total_orders": 8,
+      "total_spent": 2450.00,
+      "notes": "VIP customer, prefers silk materials"
+    },
+    {
+      "user_id": "USR-002",
+      "name": "Emily Wong",
+      "email": "emily.wong@email.com",
+      "phone": "+60 11-234 5678",
+      "gender": "Female",
+      "birthday": "1990-08-22",
+      "age": 34,
+      "address": {
+        "street": "456 Style Street",
+        "city": "Petaling Jaya",
+        "state": "Selangor",
+        "postcode": "47300",
+        "country": "Malaysia"
+      },
+      "registered_at": "2024-07-01T14:20:00",
+      "membership_tier": "Silver",
+      "preferences": {
+        "preferred_size": "M",
+        "preferred_style": ["Bold", "Chic"],
+        "preferred_colors": ["Red", "Gold", "Black"],
+        "shoe_size": "38"
+      },
+      "total_orders": 4,
+      "total_spent": 1120.00,
+      "notes": "Loves statement pieces"
+    },
+    {
+      "user_id": "USR-003",
+      "name": "Jessica Tan",
+      "email": "jessica.tan@email.com",
+      "phone": "+60 16-789 0123",
+      "gender": "Female",
+      "birthday": "1998-12-01",
+      "age": 26,
+      "address": {
+        "street": "789 Trendy Road",
+        "city": "Georgetown",
+        "state": "Penang",
+        "postcode": "10200",
+        "country": "Malaysia"
+      },
+      "registered_at": "2024-11-30T09:15:00",
+      "membership_tier": "Bronze",
+      "preferences": {
+        "preferred_size": "XS",
+        "preferred_style": ["Minimalist", "Modern"],
+        "preferred_colors": ["White", "Beige", "Navy"],
+        "shoe_size": "36"
+      },
+      "total_orders": 1,
+      "total_spent": 268.00,
+      "notes": "New customer"
+    },
+    {
+      "user_id": "USR-004",
+      "name": "Michelle Lee",
+      "email": "michelle.lee@email.com",
+      "phone": "+60 17-456 7890",
+      "gender": "Female",
+      "birthday": "1988-05-10",
+      "age": 36,
+      "address": {
+        "street": "321 Glamour Lane",
+        "city": "Johor Bahru",
+        "state": "Johor",
+        "postcode": "80000",
+        "country": "Malaysia"
+      },
+      "registered_at": "2022-12-30T16:45:00",
+      "membership_tier": "Platinum",
+      "preferences": {
+        "preferred_size": "M",
+        "preferred_style": ["Glamorous", "Elegant"],
+        "preferred_colors": ["Gold", "Silver", "Champagne"],
+        "shoe_size": "39"
+      },
+      "total_orders": 25,
+      "total_spent": 8750.00,
+      "notes": "Top customer, always buys matching accessories"
+    },
+    {
+      "user_id": "USR-005",
+      "name": "Amanda Lim",
+      "email": "amanda.lim@email.com",
+      "phone": "+60 19-111 2222",
+      "gender": "Female",
+      "birthday": "1992-07-18",
+      "age": 32,
+      "address": {
+        "street": "55 Chic Boulevard",
+        "city": "Ipoh",
+        "state": "Perak",
+        "postcode": "30000",
+        "country": "Malaysia"
+      },
+      "registered_at": "2024-03-15T11:30:00",
+      "membership_tier": "Silver",
+      "preferences": {
+        "preferred_size": "S",
+        "preferred_style": ["Classic", "Sophisticated"],
+        "preferred_colors": ["Navy", "Cream", "Burgundy"],
+        "shoe_size": "37"
+      },
+      "total_orders": 6,
+      "total_spent": 1580.00,
+      "notes": "Prefers classic cuts"
+    }
+  ]
+}
