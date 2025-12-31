@@ -27,7 +27,7 @@ class AgentType(Enum):
 
 @dataclass
 class SharedState:
-    """Shared state across all agents"""
+    """Shared state across all agents - contains FULL conversation history"""
     conversation_history: List[Dict] = field(default_factory=list)
     current_product: Optional[str] = None
     current_product_data: Optional[Dict] = None
@@ -45,6 +45,53 @@ class SharedState:
     def get_recent_history(self, n: int = 10) -> List[Dict]:
         """Get recent conversation history"""
         return self.conversation_history[-n:]
+    
+    def get_full_history(self) -> List[Dict]:
+        """Get full conversation history"""
+        return self.conversation_history
+    
+    def get_history_text(self, n: int = 10) -> str:
+        """Get recent history as concatenated text for context extraction"""
+        recent = self.get_recent_history(n)
+        return " ".join([msg.get('content', '') for msg in recent]).lower()
+    
+    def extract_context(self) -> Dict:
+        """Extract useful context from conversation history"""
+        history_text = self.get_history_text(10)
+        
+        context = {
+            'mentioned_occasions': [],
+            'mentioned_categories': [],
+            'mentioned_colors': [],
+            'mentioned_sizes': [],
+        }
+        
+        # Extract occasions
+        occasions = ['gala', 'wedding', 'dinner', 'party', 'date', 'formal', 'casual', 
+                    'cocktail', 'brunch', 'beach', 'vacation', 'office', 'work', 'prom']
+        for occ in occasions:
+            if occ in history_text:
+                context['mentioned_occasions'].append(occ)
+        
+        # Extract categories
+        categories = ['dress', 'jumpsuit', 'heel', 'heels', 'shoe', 'shoes', 'bag', 'bags', 'top', 'set']
+        for cat in categories:
+            if cat in history_text:
+                context['mentioned_categories'].append(cat)
+        
+        # Extract colors
+        colors = ['black', 'white', 'beige', 'red', 'pink', 'gold', 'navy', 'cream', 'maroon', 'nude', 'champagne']
+        for color in colors:
+            if color in history_text:
+                context['mentioned_colors'].append(color)
+        
+        # Extract sizes
+        sizes = ['xs', 'small', 'medium', 'large', 'xl', 's size', 'm size', 'l size']
+        for size in sizes:
+            if size in history_text:
+                context['mentioned_sizes'].append(size)
+        
+        return context
     
     def set_current_product(self, product: Dict):
         """Set current product context"""
@@ -125,6 +172,9 @@ class RouterAgent:
         # Build context
         current_product = state.current_product or "None"
         pending_action = state.pending_action
+        # Extract context from conversation history
+        context = state.extract_context()
+        
         pending_str = f"Pending: {pending_action['type']} for {pending_action.get('data', {}).get('product_name', 'unknown')}" if pending_action else "None"
         
         system_prompt = f"""You are a router for a fashion boutique chatbot. Analyze the query and decide which agent should handle it.
@@ -133,6 +183,8 @@ CURRENT CONTEXT:
 - Current Product: {current_product}
 - Pending Action: {pending_str}
 - Recent Products Discussed: {', '.join([p.get('product_name', '') for p in state.last_shown_products[-3:]]) or 'None'}
+- Occasions Mentioned in Conversation: {', '.join(context['mentioned_occasions']) or 'None'}
+- Categories Mentioned in Conversation: {', '.join(context['mentioned_categories']) or 'None'}
 
 AGENTS:
 1. DEFLECTION - ONLY for truly off-topic questions (weather, math, cooking, general knowledge NOT related to fashion)
@@ -145,15 +197,18 @@ CRITICAL RULES:
 2. Category words alone (dress, dresses, heels, bags, jumpsuit) → INFO (show products)
 3. Occasion-based queries (gala, wedding, dinner, party, date) + fashion context → INFO
 4. If user refers to "this", "it", "the dress" without naming a product → Use current product context
-5. "other colors for this?" → INFO
-6. "i want to order..." / "buy..." / "purchase..." → ACTION
-7. "cancel order" / "modify order" / "change order" → ACTION
-8. "track order" / "order status" / "where is my order" → INFO
-9. Questions about weather, food, math, history, science (NOT fashion) → DEFLECTION
+5. If user previously mentioned an occasion (like "gala dinner"), remember it for follow-up queries
+6. "other colors for this?" → INFO
+7. "i want to order..." / "buy..." / "purchase..." → ACTION
+8. "cancel order" / "modify order" / "change order" → ACTION
+9. "track order" / "order status" / "where is my order" → INFO
+10. Questions about weather, food, math, history, science (NOT fashion) → DEFLECTION
+
+IMPORTANT: If "Occasions Mentioned in Conversation" shows something like "gala, dinner" - this context applies to follow-up queries!
 
 EXAMPLES:
 - "what to wear for gala dinner" → INFO (fashion advice!)
-- "dress" → INFO (show dresses)
+- "dress" (after user asked about gala) → INFO (show dresses FOR GALA context)
 - "dress for gala dinner" → INFO (recommendation)
 - "what's the weather" → DEFLECTION
 - "ella dress" → INFO (product info)
@@ -298,13 +353,24 @@ class DeflectionAgent:
     - Thanks
     - Goodbye
     - Off-topic questions (politely redirects)
+    
+    SAFETY: If fashion keywords detected, returns recommendation instead of deflecting!
     """
     
-    def __init__(self, openai_client=None):
+    def __init__(self, openai_client=None, products: List[Dict] = None):
         self.client = openai_client
+        self.products = products or []
     
     def handle(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
         q = query.lower().strip()
+        
+        # SAFETY CHECK: If this looks like a fashion query, show products instead of deflecting!
+        fashion_keywords = ['dress', 'dresses', 'jumpsuit', 'heel', 'heels', 'bag', 'bags',
+                           'wear', 'outfit', 'style', 'fashion', 'gala', 'wedding', 'dinner',
+                           'party', 'formal', 'casual', 'cocktail', 'recommend', 'show', 'looking for']
+        if any(kw in q for kw in fashion_keywords):
+            # This is a fashion query - redirect to showing products!
+            return self._show_products_fallback(query, state)
         
         # Greetings
         if any(w in q for w in ['hello', 'hi', 'hey', 'good morning', 'good afternoon']):
@@ -327,33 +393,53 @@ class DeflectionAgent:
                 metadata={"intent": "goodbye"}
             )
         
-        # Off-topic - Use LLM for natural response or fallback
-        if self.client:
-            try:
-                messages = [
-                    {"role": "system", "content": """You are a friendly fashion boutique assistant. 
-The user asked something off-topic (not about fashion/shopping). 
-Politely acknowledge their question, explain you're a fashion assistant, and redirect to fashion topics.
-Keep it friendly and brief (2-3 sentences max)."""},
-                    {"role": "user", "content": query}
-                ]
-                response = self.client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=messages,
-                    max_tokens=100,
-                    temperature=0.7
-                )
-                return AgentResponse(
-                    message=response.choices[0].message.content,
-                    metadata={"intent": "off_topic"}
-                )
-            except:
-                pass
-        
-        # Fallback
+        # Off-topic - simple redirect, no LLM needed
         return AgentResponse(
-            message="I'm ByNoemie's fashion assistant, so I specialize in helping you find the perfect outfit! 👗 Would you like me to show you our dresses, jumpsuits, or heels?",
+            message="I'm ByNoemie's fashion assistant! 👗 I can help you find dresses, jumpsuits, heels, and bags. What are you looking for today?",
             metadata={"intent": "off_topic"}
+        )
+    
+    def _show_products_fallback(self, query: str, state: SharedState) -> AgentResponse:
+        """Fallback: show products when fashion query incorrectly routed here"""
+        if not self.products:
+            return AgentResponse(
+                message="I'd love to help you find something! What type of outfit are you looking for - dresses, jumpsuits, heels, or bags?"
+            )
+        
+        # Determine category
+        q = query.lower()
+        category = 'Dress'  # Default
+        if any(w in q for w in ['jumpsuit']):
+            category = 'jumpsuit'
+        elif any(w in q for w in ['heel', 'heels', 'shoe']):
+            category = 'heel'
+        elif any(w in q for w in ['bag', 'bags']):
+            category = 'bag'
+        
+        # Filter and get products
+        matching = [p for p in self.products if 
+                   category.lower() in p.get('product_type', '').lower() 
+                   or category.lower() in p.get('product_name', '').lower()]
+        
+        if not matching:
+            matching = self.products
+        
+        matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:5]
+        
+        # Update state
+        state.last_shown_products = matching
+        
+        # Detect occasion
+        occasion = ""
+        for occ in ['gala', 'wedding', 'dinner', 'party', 'date', 'formal']:
+            if occ in q:
+                occasion = f" for your {occ}"
+                break
+        
+        product_names = ", ".join([p['product_name'] for p in matching[:2]])
+        return AgentResponse(
+            message=f"Here are some stunning {category.lower()}s{occasion}! Check out the {product_names}. 💕",
+            products_to_show=matching
         )
 
 
@@ -488,11 +574,17 @@ class InfoAgent:
         return AgentResponse(message="For policy questions, please visit our website or contact support@bynoemie.com")
     
     def _handle_recommendation(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
-        """Handle product recommendations"""
+        """Handle product recommendations - ALWAYS shows products, uses FULL conversation history"""
         q = query.lower()
         
-        # Determine category from explicit mentions
+        # Use SharedState's context extraction (uses FULL history)
+        context = state.extract_context()
+        history_text = state.get_history_text(10)  # Last 10 messages as text
+        
+        # Determine category from query OR conversation context
         category = None
+        
+        # Check current query first
         if any(w in q for w in ['dress', 'dresses', 'gown']):
             category = 'Dress'
         elif any(w in q for w in ['jumpsuit', 'jumpsuits', 'romper']):
@@ -506,31 +598,44 @@ class InfoAgent:
         elif any(w in q for w in ['set', 'sets', 'coord']):
             category = 'set'
         
-        # For occasion-based queries without explicit category, default to dresses
-        # (gala, wedding, dinner, party typically need dresses)
-        formal_occasions = ['gala', 'wedding', 'dinner', 'party', 'cocktail', 'formal', 'event']
+        # Check conversation history context if no category in current query
+        if not category and context['mentioned_categories']:
+            cat_map = {'dress': 'Dress', 'jumpsuit': 'jumpsuits', 'heel': 'Heel', 
+                      'heels': 'Heel', 'shoe': 'Heel', 'shoes': 'Heel',
+                      'bag': 'bag', 'bags': 'bag', 'top': 'top', 'set': 'set'}
+            for cat in context['mentioned_categories']:
+                if cat in cat_map:
+                    category = cat_map[cat]
+                    break
+        
+        # For occasion-based queries, default to dresses
+        formal_occasions = ['gala', 'wedding', 'dinner', 'party', 'cocktail', 'formal', 'event', 'prom', 'ball']
         if not category and any(occ in q for occ in formal_occasions):
             category = 'Dress'
+        # Check history context for occasions
+        if not category and context['mentioned_occasions']:
+            category = 'Dress'
         
-        # For "what to wear" without category, show a mix or dresses
-        if not category and ('wear' in q or 'outfit' in q):
-            category = 'Dress'  # Default to dresses for outfit questions
+        # Default to dresses for wear/outfit questions
+        if not category and any(w in q for w in ['wear', 'outfit', 'something']):
+            category = 'Dress'
         
-        # Filter products
-        if category:
-            matching = [p for p in self.products if category.lower() in p.get('product_type', '').lower() 
-                       or category.lower() in p.get('product_collection', '').lower()
-                       or category.lower() in p.get('product_name', '').lower()]
-        else:
-            # No category - show latest products
+        # If still no category, default to dresses
+        if not category:
+            category = 'Dress'
+        
+        # Filter products by category
+        matching = [p for p in self.products if 
+                   category.lower() in p.get('product_type', '').lower() 
+                   or category.lower() in p.get('product_collection', '').lower()
+                   or category.lower() in p.get('product_name', '').lower()]
+        
+        # If no matches, show all products
+        if not matching:
             matching = self.products
         
-        # Sort by popularity or newness (using created_at)
+        # Sort by newness and limit
         matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:5]
-        
-        if not matching and category:
-            # Fallback: if no category match, try broader search
-            matching = sorted(self.products, key=lambda x: x.get('created_at', ''), reverse=True)[:5]
         
         if matching:
             # Update state
@@ -538,36 +643,78 @@ class InfoAgent:
             if len(matching) == 1:
                 state.set_current_product(matching[0])
             
-            # Build response
+            # Get occasion from context
+            occasion = context['mentioned_occasions'][0] if context['mentioned_occasions'] else None
+            if not occasion:
+                for occ in formal_occasions:
+                    if occ in q:
+                        occasion = occ
+                        break
+            
+            # Build response with LLM - include conversation history for context!
             if self.client:
-                product_info = "\n".join([
-                    f"- {p['product_name']}: MYR {p.get('price_min', 0)}, {p.get('colors_available', 'N/A')}"
+                product_list = "\n".join([
+                    f"- {p['product_name']}: MYR {p.get('price_min', 0)}, Colors: {p.get('colors_available', 'N/A')}"
                     for p in matching
                 ])
+                
+                occasion_context = f" for a {occasion}" if occasion else ""
+                
+                # Build conversation history for LLM
+                conv_history = []
+                for msg in state.get_recent_history(6):
+                    conv_history.append({"role": msg.get("role", "user"), "content": msg.get("content", "")[:200]})
+                
                 try:
                     messages = [
-                        {"role": "system", "content": "You are a helpful fashion assistant. Present these products naturally and engagingly. Be concise (3-4 sentences max)."},
-                        {"role": "user", "content": f"User asked: {query}\n\nProducts:\n{product_info}"}
+                        {"role": "system", "content": f"""You are a helpful fashion assistant for ByNoemie boutique.
+
+CONVERSATION CONTEXT: The user has been discussing{occasion_context if occasion else ' fashion'}.
+Previous topics mentioned: {', '.join(context['mentioned_occasions']) or 'none'}
+Categories discussed: {', '.join(context['mentioned_categories']) or 'none'}
+
+IMPORTANT RULES:
+1. You MUST present the products below - DO NOT ask clarifying questions!
+2. Reference the conversation context (e.g., "For your {occasion}..." if occasion mentioned)
+3. Mention 1-2 specific products by name
+4. Be concise (2-3 sentences)
+5. DO NOT ask "what style?" or "what occasion?" - just present the products!"""},
                     ]
+                    
+                    # Add conversation history
+                    messages.extend(conv_history)
+                    
+                    # Add current request with products
+                    messages.append({
+                        "role": "user", 
+                        "content": f"Current query: {query}\n\nProducts to recommend:\n{product_list}"
+                    })
+                    
                     response = self.client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=messages,
-                        max_tokens=200,
+                        max_tokens=150,
                         temperature=0.7
                     )
                     return AgentResponse(
                         message=response.choices[0].message.content,
                         products_to_show=matching
                     )
-                except:
-                    pass
+                except Exception as e:
+                    print(f"LLM error in recommendation: {e}")
             
+            # Fallback without LLM
+            product_names = ", ".join([p['product_name'] for p in matching[:3]])
+            occasion_text = f" for your {occasion}" if occasion else ""
             return AgentResponse(
-                message=f"Here are some options for you! 👗",
+                message=f"Here are some beautiful {category.lower()}s{occasion_text}! Check out the {product_names}. 💕",
                 products_to_show=matching
             )
         
-        return AgentResponse(message="I couldn't find products matching your criteria. Would you like to see our latest arrivals?")
+        return AgentResponse(
+            message=f"Let me show you our latest {category.lower()}s!",
+            products_to_show=self.products[:5]
+        )
     
     def _handle_stock_check(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
         """Handle stock availability queries"""
@@ -630,16 +777,24 @@ class InfoAgent:
         return AgentResponse(message="Which product's price would you like to know?")
     
     def _handle_product_info(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
-        """Handle general product info queries"""
+        """Handle general product info queries - uses FULL conversation history"""
         product_name = extracted.get('product_mentioned')
         product = self._find_product(product_name)
         
-        # If no product but we have current context
+        # If no product but we have current context from state
         if not product and state.current_product:
             product = self._find_product(state.current_product)
         
+        # Search conversation history for product context
         if not product:
-            # Search in query for any product name
+            history_text = state.get_history_text(10)
+            for p in self.products:
+                if p['product_name'].lower() in history_text:
+                    product = p
+                    break
+        
+        # Search in current query for any product name
+        if not product:
             for p in self.products:
                 if p['product_name'].lower() in query.lower():
                     product = p
@@ -658,12 +813,29 @@ class InfoAgent:
                 "description": product.get('product_description', '')[:200]
             }
             
+            # Get context from history
+            context = state.extract_context()
+            
             if self.client:
                 try:
+                    # Include conversation history for context
                     messages = [
-                        {"role": "system", "content": "You are a helpful fashion assistant. Provide product info naturally. Focus on what the user asked about."},
-                        {"role": "user", "content": f"Query: {query}\nProduct Info: {json.dumps(info)}"}
+                        {"role": "system", "content": f"""You are a helpful fashion assistant for ByNoemie.
+                        
+CONTEXT from conversation:
+- Occasions mentioned: {', '.join(context['mentioned_occasions']) or 'none'}
+- Colors mentioned: {', '.join(context['mentioned_colors']) or 'none'}
+
+Provide product info naturally. Focus on what the user asked about.
+If they asked about colors, sizes, or specific attributes, answer that directly."""}
                     ]
+                    
+                    # Add conversation history
+                    for msg in state.get_recent_history(4):
+                        messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")[:150]})
+                    
+                    messages.append({"role": "user", "content": f"Query: {query}\nProduct Info: {json.dumps(info)}"})
+                    
                     response = self.client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=messages,
@@ -759,14 +931,14 @@ class ActionAgent:
     def _handle_create_order(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
         """
         Handle order creation with validation:
-        1. Find product
+        1. Find product (from query, extracted, context, or history)
         2. Validate size exists
         3. Validate color exists
         4. Check stock (optional)
         5. Store pending action
         6. Ask for confirmation
         """
-        # Find product
+        # Find product from extracted info
         product_name = extracted.get('product_mentioned')
         product = self._find_product(product_name)
         
@@ -780,6 +952,18 @@ class ActionAgent:
         # Use current context if no product found
         if not product and state.current_product:
             product = self._find_product(state.current_product)
+        
+        # Search conversation history for products mentioned
+        if not product:
+            history_text = state.get_history_text(10)
+            for p in self.products:
+                if p['product_name'].lower() in history_text:
+                    product = p
+                    break
+        
+        # Check last shown products
+        if not product and state.last_shown_products:
+            product = state.last_shown_products[0]  # Use first shown product
         
         if not product:
             return AgentResponse(
@@ -1189,7 +1373,7 @@ class ChatbotOrchestrator:
         
         # Initialize agents
         self.router = RouterAgent(openai_client, product_names)
-        self.deflection_agent = DeflectionAgent(openai_client)
+        self.deflection_agent = DeflectionAgent(openai_client, products)  # Pass products for fallback
         self.info_agent = InfoAgent(openai_client, products, stock_data, order_manager, policy_rag)
         self.action_agent = ActionAgent(openai_client, products, stock_data, order_manager, user_manager)
         self.confirmation_agent = ConfirmationAgent(order_manager, user_manager)
@@ -1201,15 +1385,31 @@ class ChatbotOrchestrator:
             AgentType.CONFIRMATION: self.confirmation_agent
         }
     
-    def process(self, query: str) -> AgentResponse:
+    def process(self, query: str, chat_history: List[Dict] = None) -> AgentResponse:
         """
         Process a user query:
-        1. Route to appropriate agent
-        2. Execute agent
-        3. Update state
-        4. Return response
+        1. Sync state from external history (Streamlit session)
+        2. Route to appropriate agent
+        3. Execute agent
+        4. Update state
+        5. Return response
+        
+        Args:
+            query: User's message
+            chat_history: External chat history (from Streamlit session_state.messages)
         """
-        # Add user message to history
+        # CRITICAL: Sync state from external history to ensure context is preserved
+        # Streamlit's session_state.messages is the source of truth
+        if chat_history:
+            self.state.conversation_history = []
+            for msg in chat_history:
+                self.state.add_message(
+                    msg.get("role", "user"), 
+                    msg.get("content", ""),
+                    msg.get("metadata")
+                )
+        
+        # Add current user message to history
         self.state.add_message("user", query)
         
         # Route query

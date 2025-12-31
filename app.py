@@ -411,11 +411,6 @@ def main():
     if "messages" not in st.session_state:
         st.session_state.messages = []
     
-    # Sync orchestrator state with session messages
-    if orchestrator and not orchestrator.state.conversation_history:
-        for msg in st.session_state.messages:
-            orchestrator.state.add_message(msg["role"], msg["content"])
-    
     # Display chat history
     for i, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
@@ -449,7 +444,11 @@ def main():
             
             if orchestrator:
                 # Process query through multi-agent system
-                agent_response = orchestrator.process(query)
+                # PASS CHAT HISTORY so agents have full context!
+                agent_response = orchestrator.process(
+                    query, 
+                    chat_history=st.session_state.messages  # Pass full history
+                )
                 
                 response = agent_response.message
                 products_to_show = agent_response.products_to_show
