@@ -424,7 +424,7 @@ class DeflectionAgent:
         if not matching:
             matching = self.products
         
-        matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:5]
+        matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:8]
         
         # Update state
         state.last_shown_products = matching
@@ -635,7 +635,7 @@ class InfoAgent:
             matching = self.products
         
         # Sort by newness and limit
-        matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:5]
+        matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:8]
         
         if matching:
             # Update state
@@ -713,7 +713,7 @@ IMPORTANT RULES:
         
         return AgentResponse(
             message=f"Let me show you our latest {category.lower()}s!",
-            products_to_show=self.products[:5]
+            products_to_show=self.products[:8]
         )
     
     def _handle_stock_check(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:

@@ -93,17 +93,134 @@ p, span, li, div {
     box-shadow: 0 8px 20px rgba(212, 165, 116, 0.15);
 }
 
+/* Horizontal scroll container */
+.products-scroll-container {
+    display: flex;
+    overflow-x: auto;
+    gap: 16px;
+    padding: 10px 0 20px 0;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+}
+
+.products-scroll-container::-webkit-scrollbar {
+    height: 6px;
+}
+
+.products-scroll-container::-webkit-scrollbar-track {
+    background: #1a1a1a;
+    border-radius: 3px;
+}
+
+.products-scroll-container::-webkit-scrollbar-thumb {
+    background: #3a3a3a;
+    border-radius: 3px;
+}
+
+.products-scroll-container::-webkit-scrollbar-thumb:hover {
+    background: #d4a574;
+}
+
+.product-card-link {
+    text-decoration: none;
+    flex-shrink: 0;
+}
+
+.product-card-scroll {
+    width: 180px;
+    background: linear-gradient(145deg, #2a2a2a 0%, #1f1f1f 100%);
+    border-radius: 12px;
+    border: 1px solid #3a3a3a;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.product-card-scroll:hover {
+    border-color: #d4a574;
+    transform: translateY(-4px);
+    box-shadow: 0 8px 20px rgba(212, 165, 116, 0.15);
+}
+
+.product-image-container {
+    width: 100%;
+    height: 200px;
+    overflow: hidden;
+    background: #1a1a1a;
+}
+
+.product-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.3s ease;
+}
+
+.product-card-scroll:hover .product-img {
+    transform: scale(1.05);
+}
+
+.product-details {
+    padding: 12px;
+}
+
 .product-name {
+    color: #f5f5f5;
+    font-family: 'Montserrat', sans-serif;
+    font-size: 0.9em;
+    font-weight: 500;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.product-price {
     color: #d4a574;
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 1.05em;
+    font-family: 'Montserrat', sans-serif;
+    font-size: 0.95em;
     font-weight: 600;
     margin-bottom: 4px;
 }
 
-.product-price {
-    color: #e8c59d;
-    font-size: 0.95em;
+.product-category {
+    color: #888;
+    font-size: 0.75em;
+    margin-bottom: 6px;
+}
+
+.product-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.product-tag {
+    background: rgba(212, 165, 116, 0.1);
+    border: 1px solid rgba(212, 165, 116, 0.3);
+    color: #d4a574;
+    font-size: 0.65em;
+    padding: 2px 6px;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+
+.stock-in {
+    color: #2ecc71;
+    font-size: 0.75em;
+    font-weight: 500;
+}
+
+.stock-low {
+    color: #e74c3c;
+    font-size: 0.75em;
+    font-weight: 500;
+}
+
+.stock-out {
+    color: #888;
+    font-size: 0.75em;
     font-weight: 500;
 }
 
@@ -344,55 +461,72 @@ def display_feedback_buttons(message_id: str, query: str, response: str, product
 
 
 # =============================================================================
-# PRODUCT DISPLAY
+# PRODUCT DISPLAY - Horizontal Scroll Style
 # =============================================================================
 def display_products(products: List[Dict], stock_data: Dict, images_data: Dict, key_prefix: str = ""):
-    """Display product cards - compact design, clickable to product page"""
+    """Display products in horizontal scrollable row with tags"""
     if not products:
         return
     
-    # Display in columns (up to 4 products per row)
-    num_cols = min(len(products), 4)
-    cols = st.columns(num_cols)
-    
-    for i, product in enumerate(products[:4]):
-        with cols[i % num_cols]:
-            product_handle = product.get('product_handle', '')
-            product_url = product.get('product_link', f"https://bynoemie.com.my/products/{product_handle}")
-            
-            # Get image
-            image_url = None
-            if product_handle in images_data:
-                image_url = images_data[product_handle].get('image_1')
-            if not image_url:
-                image_url = product.get('image_url_1', '')
-            
-            # Stock status
-            stock_status = product.get('stock_availability', 'In Stock')
-            stock_class = 'in-stock' if stock_status == 'In Stock' else 'low-stock'
-            
-            # Display clickable card with image
-            st.markdown(f"""
-            <a href="{product_url}" target="_blank" style="text-decoration: none;">
-                <div class="product-card" style="cursor: pointer;">
-                    <div class="product-name">{product.get('product_name', 'Product')} <span style="font-size: 0.7em; opacity: 0.6;">↗</span></div>
-                    <div class="product-price">MYR {product.get('price_min', 0):.0f}</div>
-                    <span class="stock-badge {stock_class}">{stock_status}</span>
-                    {f'<img src="{image_url}" class="product-image" style="width: 100%; max-height: 160px; object-fit: cover; border-radius: 8px; margin-top: 8px;">' if image_url else ''}
+    # Build HTML for horizontal scroll
+    cards_html = ""
+    for i, product in enumerate(products[:8]):  # Show up to 8 products
+        product_handle = product.get('product_handle', '')
+        product_url = product.get('product_link', f"https://bynoemie.com.my/products/{product_handle}")
+        
+        # Get image
+        image_url = None
+        if product_handle in images_data:
+            image_url = images_data[product_handle].get('image_1')
+        if not image_url:
+            image_url = product.get('image_url_1', '')
+        
+        # Stock status
+        stock_status = product.get('stock_availability', 'In Stock')
+        total_inventory = product.get('total_inventory', 0)
+        
+        if stock_status == 'In Stock':
+            if total_inventory and 0 < total_inventory <= 5:
+                stock_html = f'<div class="stock-low">Only {total_inventory} left</div>'
+            else:
+                stock_html = '<div class="stock-in">In Stock</div>'
+        else:
+            stock_html = '<div class="stock-out">Out of Stock</div>'
+        
+        # Category
+        category = product.get('subcategory', '') or product.get('product_type', '')
+        category_html = f'<div class="product-category">{category}</div>' if category else ''
+        
+        # Tags (vibe_tags or style_attributes)
+        tags = product.get('vibe_tags', []) or product.get('style_attributes', [])
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(',')]
+        tags_html = ''.join([f'<span class="product-tag">{tag}</span>' for tag in tags[:3]])
+        
+        # Build card
+        cards_html += f'''
+        <a href="{product_url}" target="_blank" class="product-card-link">
+            <div class="product-card-scroll">
+                <div class="product-image-container">
+                    <img src="{image_url}" class="product-img" onerror="this.style.display='none'">
                 </div>
-            </a>
-            """, unsafe_allow_html=True)
-            
-            # Compact action buttons
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("ℹ️ Info", key=f"info_{key_prefix}_{i}", use_container_width=True):
-                    st.session_state.auto_query = f"Tell me about {product.get('product_name')}"
-                    st.rerun()
-            with col_b:
-                if st.button("🛒 Order", key=f"order_{key_prefix}_{i}", use_container_width=True):
-                    st.session_state.auto_query = f"I want to order the {product.get('product_name')}"
-                    st.rerun()
+                <div class="product-details">
+                    <div class="product-name">{product.get('product_name', 'Product')}</div>
+                    <div class="product-price">MYR {product.get('price_min', 0):.0f}</div>
+                    {category_html}
+                    <div class="product-tags">{tags_html}</div>
+                    {stock_html}
+                </div>
+            </div>
+        </a>
+        '''
+    
+    # Wrap in scrollable container
+    st.markdown(f'''
+    <div class="products-scroll-container">
+        {cards_html}
+    </div>
+    ''', unsafe_allow_html=True)
 
 
 # =============================================================================
