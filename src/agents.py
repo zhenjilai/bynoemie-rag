@@ -91,13 +91,32 @@ class RouterAgent:
         if q.upper() in ["ORDER", "DELETE", "CHANGE"]:
             return AgentType.CONFIRMATION, {"confirm_type": q.upper()}
         
-        # 2. Use LLM for intelligent routing
+        # 2. Fashion keyword safety check - NEVER deflect fashion queries
+        fashion_keywords = [
+            'dress', 'dresses', 'jumpsuit', 'jumpsuits', 'heel', 'heels', 'shoe', 'shoes',
+            'bag', 'bags', 'top', 'tops', 'set', 'sets', 'outfit', 'outfits',
+            'wear', 'wearing', 'style', 'styling', 'fashion', 'clothes', 'clothing',
+            'gala', 'wedding', 'dinner', 'party', 'date', 'occasion', 'formal', 'casual',
+            'recommend', 'suggestion', 'show me', 'looking for', 'browse',
+            'stock', 'available', 'size', 'color', 'colour', 'price', 'cost',
+            'order', 'buy', 'purchase', 'track', 'cancel', 'modify'
+        ]
+        is_fashion_query = any(kw in q_lower for kw in fashion_keywords)
+        
+        # Check if it's a product name
+        is_product_query = any(pname.lower() in q_lower for pname in self.product_names)
+        
+        # 3. Use LLM for intelligent routing
         if self.client:
             result = self._llm_route(query, state)
             if result:
+                agent_type, extracted = result
+                # Safety: If LLM says DEFLECTION but query has fashion keywords, override to INFO
+                if agent_type == AgentType.DEFLECTION and (is_fashion_query or is_product_query):
+                    return AgentType.INFO, extracted
                 return result
         
-        # 3. Fallback to keyword-based routing
+        # 4. Fallback to keyword-based routing
         return self._keyword_route(q_lower, state)
     
     def _llm_route(self, query: str, state: SharedState) -> Optional[Tuple[AgentType, Dict]]:
@@ -116,18 +135,29 @@ CURRENT CONTEXT:
 - Recent Products Discussed: {', '.join([p.get('product_name', '') for p in state.last_shown_products[-3:]]) or 'None'}
 
 AGENTS:
-1. DEFLECTION - For off-topic questions, greetings (hi, hello), thanks, goodbye, non-fashion questions
-2. INFO - For product info, recommendations, stock checks, colors, sizes, prices, policies, order tracking
+1. DEFLECTION - ONLY for truly off-topic questions (weather, math, cooking, general knowledge NOT related to fashion)
+2. INFO - For ALL fashion-related queries: product info, recommendations, stock, prices, styling advice, outfit suggestions, what to wear questions
 3. ACTION - For creating orders, modifying orders, canceling orders, updating profile
 4. CONFIRMATION - ONLY when user types exactly "ORDER", "DELETE", or "CHANGE"
 
-RULES:
-1. If user refers to "this", "it", "the dress" without naming a product → Use current product context
-2. "other colors for this?" → INFO (asking about current product)
-3. "i want to order..." / "buy..." / "purchase..." → ACTION
-4. "cancel order" / "modify order" / "change order" → ACTION
-5. "track order" / "order status" / "where is my order" → INFO
-6. Questions about weather, food, general knowledge → DEFLECTION
+CRITICAL RULES:
+1. ANY question about what to wear, outfit advice, styling, fashion recommendations → INFO (NOT DEFLECTION!)
+2. Category words alone (dress, dresses, heels, bags, jumpsuit) → INFO (show products)
+3. Occasion-based queries (gala, wedding, dinner, party, date) + fashion context → INFO
+4. If user refers to "this", "it", "the dress" without naming a product → Use current product context
+5. "other colors for this?" → INFO
+6. "i want to order..." / "buy..." / "purchase..." → ACTION
+7. "cancel order" / "modify order" / "change order" → ACTION
+8. "track order" / "order status" / "where is my order" → INFO
+9. Questions about weather, food, math, history, science (NOT fashion) → DEFLECTION
+
+EXAMPLES:
+- "what to wear for gala dinner" → INFO (fashion advice!)
+- "dress" → INFO (show dresses)
+- "dress for gala dinner" → INFO (recommendation)
+- "what's the weather" → DEFLECTION
+- "ella dress" → INFO (product info)
+- "i want to order the luna dress" → ACTION
 
 AVAILABLE PRODUCTS: {', '.join(self.product_names[:15])}
 
@@ -361,7 +391,28 @@ class InfoAgent:
         if any(w in q for w in ['return', 'refund', 'exchange', 'shipping', 'delivery', 'policy']):
             return self._handle_policy(query, state)
         
-        if any(w in q for w in ['recommend', 'suggest', 'show me', 'looking for', 'browse', 'what do you have']):
+        # Fashion advice / What to wear / Occasion-based queries
+        if any(w in q for w in ['what to wear', 'what should i wear', 'outfit for', 'dress for', 
+                                'something for', 'need something', 'looking for something']):
+            return self._handle_recommendation(query, state, extracted)
+        
+        # Occasion keywords that imply recommendation
+        occasion_words = ['gala', 'wedding', 'dinner', 'party', 'date', 'formal', 'casual', 
+                         'cocktail', 'brunch', 'beach', 'vacation', 'office', 'work']
+        if any(w in q for w in occasion_words):
+            return self._handle_recommendation(query, state, extracted)
+        
+        # Category-only queries (dress, dresses, heels, etc.) - show products immediately
+        category_words = ['dress', 'dresses', 'jumpsuit', 'jumpsuits', 'heel', 'heels', 
+                         'shoe', 'shoes', 'bag', 'bags', 'top', 'tops', 'set', 'sets']
+        # Check if query is primarily a category request (short query with category word)
+        words = q.split()
+        if len(words) <= 3 and any(w in q for w in category_words):
+            return self._handle_recommendation(query, state, extracted)
+        
+        # Explicit recommendation requests
+        if any(w in q for w in ['recommend', 'suggest', 'show me', 'show', 'looking for', 
+                                'browse', 'what do you have', 'any', 'some']):
             return self._handle_recommendation(query, state, extracted)
         
         if any(w in q for w in ['stock', 'available', 'in stock', 'do you have']):
@@ -373,8 +424,12 @@ class InfoAgent:
         if any(w in q for w in ['color', 'colour', 'size', 'material', 'fabric', 'tell me about', 'what is']):
             return self._handle_product_info(query, state, extracted)
         
-        # Default: treat as product inquiry
-        return self._handle_product_info(query, state, extracted)
+        # Check if a specific product is mentioned - show product info
+        if extracted.get('product_mentioned'):
+            return self._handle_product_info(query, state, extracted)
+        
+        # Default: treat as recommendation request
+        return self._handle_recommendation(query, state, extracted)
     
     def _find_product(self, name: str) -> Optional[Dict]:
         """Find product by name (case insensitive, partial match)"""
@@ -436,26 +491,46 @@ class InfoAgent:
         """Handle product recommendations"""
         q = query.lower()
         
-        # Determine category
+        # Determine category from explicit mentions
         category = None
         if any(w in q for w in ['dress', 'dresses', 'gown']):
             category = 'Dress'
-        elif any(w in q for w in ['jumpsuit', 'romper']):
+        elif any(w in q for w in ['jumpsuit', 'jumpsuits', 'romper']):
             category = 'jumpsuits'
         elif any(w in q for w in ['heel', 'heels', 'shoe', 'shoes']):
             category = 'Heel'
         elif any(w in q for w in ['bag', 'bags', 'clutch', 'purse']):
             category = 'bag'
+        elif any(w in q for w in ['top', 'tops', 'blouse']):
+            category = 'top'
+        elif any(w in q for w in ['set', 'sets', 'coord']):
+            category = 'set'
+        
+        # For occasion-based queries without explicit category, default to dresses
+        # (gala, wedding, dinner, party typically need dresses)
+        formal_occasions = ['gala', 'wedding', 'dinner', 'party', 'cocktail', 'formal', 'event']
+        if not category and any(occ in q for occ in formal_occasions):
+            category = 'Dress'
+        
+        # For "what to wear" without category, show a mix or dresses
+        if not category and ('wear' in q or 'outfit' in q):
+            category = 'Dress'  # Default to dresses for outfit questions
         
         # Filter products
         if category:
             matching = [p for p in self.products if category.lower() in p.get('product_type', '').lower() 
-                       or category.lower() in p.get('product_collection', '').lower()]
+                       or category.lower() in p.get('product_collection', '').lower()
+                       or category.lower() in p.get('product_name', '').lower()]
         else:
+            # No category - show latest products
             matching = self.products
         
         # Sort by popularity or newness (using created_at)
         matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:5]
+        
+        if not matching and category:
+            # Fallback: if no category match, try broader search
+            matching = sorted(self.products, key=lambda x: x.get('created_at', ''), reverse=True)[:5]
         
         if matching:
             # Update state
