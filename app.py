@@ -79,43 +79,41 @@ p, span, li, div {
 
 .product-card {
     background: linear-gradient(145deg, #2a2a2a 0%, #1f1f1f 100%);
-    border-radius: 16px;
-    padding: 16px;
-    margin: 8px 0;
+    border-radius: 12px;
+    padding: 12px;
+    margin: 4px 0;
     border: 1px solid #3a3a3a;
     transition: all 0.3s ease;
+    cursor: pointer;
 }
 
 .product-card:hover {
     border-color: #d4a574;
-    transform: translateY(-2px);
+    transform: translateY(-4px);
+    box-shadow: 0 8px 20px rgba(212, 165, 116, 0.15);
 }
 
 .product-name {
     color: #d4a574;
     font-family: 'Cormorant Garamond', serif;
-    font-size: 1.3em;
+    font-size: 1.05em;
     font-weight: 600;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 
 .product-price {
     color: #e8c59d;
-    font-size: 1.1em;
+    font-size: 0.95em;
     font-weight: 500;
-}
-
-.product-info {
-    color: #888;
-    font-size: 0.9em;
 }
 
 .stock-badge {
     display: inline-block;
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 0.8em;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.7em;
     font-weight: 500;
+    margin-top: 4px;
 }
 
 .in-stock {
@@ -126,6 +124,19 @@ p, span, li, div {
 .low-stock {
     background: rgba(241, 196, 15, 0.2);
     color: #f1c40f;
+}
+
+.product-image {
+    max-height: 180px;
+    object-fit: cover;
+    border-radius: 8px;
+    margin-top: 8px;
+}
+
+/* Compact product action buttons */
+.stButton > button {
+    font-size: 0.8em !important;
+    padding: 4px 8px !important;
 }
 
 .feedback-btn {
@@ -336,16 +347,18 @@ def display_feedback_buttons(message_id: str, query: str, response: str, product
 # PRODUCT DISPLAY
 # =============================================================================
 def display_products(products: List[Dict], stock_data: Dict, images_data: Dict, key_prefix: str = ""):
-    """Display product cards"""
+    """Display product cards - compact design, clickable to product page"""
     if not products:
         return
     
-    # Display in columns
-    cols = st.columns(min(len(products), 3))
+    # Display in columns (up to 4 products per row)
+    num_cols = min(len(products), 4)
+    cols = st.columns(num_cols)
     
-    for i, product in enumerate(products[:3]):
-        with cols[i % 3]:
+    for i, product in enumerate(products[:4]):
+        with cols[i % num_cols]:
             product_handle = product.get('product_handle', '')
+            product_url = product.get('product_link', f"https://bynoemie.com.my/products/{product_handle}")
             
             # Get image
             image_url = None
@@ -358,31 +371,26 @@ def display_products(products: List[Dict], stock_data: Dict, images_data: Dict, 
             stock_status = product.get('stock_availability', 'In Stock')
             stock_class = 'in-stock' if stock_status == 'In Stock' else 'low-stock'
             
-            # Display card
+            # Display clickable card with image
             st.markdown(f"""
-            <div class="product-card">
-                <div class="product-name">{product.get('product_name', 'Product')}</div>
-                <div class="product-price">MYR {product.get('price_min', 0):.0f}</div>
-                <div class="product-info">{product.get('product_type', '')}</div>
-                <span class="stock-badge {stock_class}">{stock_status}</span>
-            </div>
+            <a href="{product_url}" target="_blank" style="text-decoration: none;">
+                <div class="product-card" style="cursor: pointer;">
+                    <div class="product-name">{product.get('product_name', 'Product')} <span style="font-size: 0.7em; opacity: 0.6;">↗</span></div>
+                    <div class="product-price">MYR {product.get('price_min', 0):.0f}</div>
+                    <span class="stock-badge {stock_class}">{stock_status}</span>
+                    {f'<img src="{image_url}" class="product-image" style="width: 100%; max-height: 160px; object-fit: cover; border-radius: 8px; margin-top: 8px;">' if image_url else ''}
+                </div>
+            </a>
             """, unsafe_allow_html=True)
             
-            # Show image if available
-            if image_url:
-                try:
-                    st.image(image_url, use_container_width=True)
-                except:
-                    pass
-            
-            # Quick actions
+            # Compact action buttons
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.button("ℹ️ Info", key=f"info_{key_prefix}_{i}"):
+                if st.button("ℹ️ Info", key=f"info_{key_prefix}_{i}", use_container_width=True):
                     st.session_state.auto_query = f"Tell me about {product.get('product_name')}"
                     st.rerun()
             with col_b:
-                if st.button("🛒 Order", key=f"order_{key_prefix}_{i}"):
+                if st.button("🛒 Order", key=f"order_{key_prefix}_{i}", use_container_width=True):
                     st.session_state.auto_query = f"I want to order the {product.get('product_name')}"
                     st.rerun()
 
