@@ -366,11 +366,13 @@ def llm_classify_intent(
     if not client:
         return fallback_classify(query, product_names, current_product)
     
-    # Build system prompt
+    # Build system prompt with current product context
+    current_context = f"\n\nCURRENT PRODUCT IN CONTEXT: {current_product}" if current_product else ""
+    
     system_prompt = """You are an intent classifier for ByNoemie fashion boutique chatbot.
 
 You will receive the FULL CONVERSATION HISTORY. Use it to understand context.
-If user says "this", "it", "that", "the item" - identify which product they're referring to from the conversation.
+If user says "this", "it", "that", "the item", "for s size", "in stock" without a product name - use the CURRENT PRODUCT from context.
 
 IMPORTANT: This is a FASHION BOUTIQUE chatbot. It should ONLY answer questions about:
 - Products (dresses, jumpsuits, heels, bags, etc.)
@@ -386,11 +388,11 @@ ANY question NOT related to fashion/products/store should be classified as OFF_T
 INTENTS:
 - GREETING: Hello, hi, hey
 - RECOMMENDATION: Show me, recommend, suggest, looking for, browse category
-- STOCK_CHECK: In stock, available, sizes, do you have
+- STOCK_CHECK: In stock, available, sizes, do you have, stock for this/it
 - PRODUCT_INFO: Tell me about, what color, what material, describe
 - PRICE_CHECK: How much, price, cost
 - POLICY_QUESTION: Returns, refunds, shipping, terms
-- ORDER_CREATE: I want to order, buy, purchase, place order
+- ORDER_CREATE: I want to order, buy, purchase, place order, "i want 1 ella dress", "order the luna dress", "i want this", "buy it"
 - ORDER_MODIFY: Change my order, modify order, update size/color/quantity
 - ORDER_CANCEL: Cancel order, delete order, remove order
 - ORDER_TRACK: Track order, where is my order, order status, check order
@@ -404,13 +406,25 @@ INTENTS:
 IMPORTANT RULES:
 1. If user types EXACTLY "ORDER", "DELETE", or "CHANGE" (case-insensitive) -> ORDER_CONFIRM
 2. Order IDs look like "ORD-001", "ORD-002", etc. Extract them if mentioned.
-3. If user refers to "this dress", "it" -> find product from conversation context
+3. If user refers to "this dress", "it", "this", "for s size", "in stock" without product name -> use CURRENT PRODUCT from context
 4. For order actions, extract order_id if user mentions it
+5. CRITICAL: If user says "i want to order X" or "i want 1 X" or "i want X" or "order the X" where X is a product -> ORDER_CREATE
+6. CRITICAL: Extract the EXACT product name from the query (e.g., "i want to order 1 ella dress s size" -> product_mentioned: "Ella Dress")
+7. CRITICAL: If no product is explicitly mentioned BUT user is asking about stock/size/color, use the CURRENT PRODUCT
+{}
+
+EXAMPLES:
+- "i want to order 1 ella dress s size" -> ORDER_CREATE, product: "Ella Dress", size: "S"
+- "i want the luna dress in white" -> ORDER_CREATE, product: "Luna Dress", color: "White"
+- "order the kylie jumpsuit" -> ORDER_CREATE, product: "Kylie Jumpsuit"
+- "do you have stock for s size" (CURRENT PRODUCT: Ella Dress) -> STOCK_CHECK, product: "Ella Dress", size: "S"
+- "other colors for this?" (CURRENT PRODUCT: Luna Dress) -> PRODUCT_INFO, product: "Luna Dress"
+- "i want this one" (CURRENT PRODUCT: Coco Dress) -> ORDER_CREATE, product: "Coco Dress"
 
 AVAILABLE PRODUCTS: {}
 
 Return ONLY JSON:
-{{"intent": "INTENT_NAME", "product_mentioned": "product name or null", "size": "size or null", "color": "color or null", "order_id": "ORD-XXX or null", "confirm_type": "ORDER/DELETE/CHANGE or null"}}""".format(', '.join(product_names[:20]))
+{{"intent": "INTENT_NAME", "product_mentioned": "exact product name or null", "size": "size or null", "color": "color or null", "order_id": "ORD-XXX or null", "confirm_type": "ORDER/DELETE/CHANGE or null"}}""".format(current_context, ', '.join(product_names[:20]))
 
     # Build messages with full chat history
     messages = [{"role": "system", "content": system_prompt}]
@@ -440,8 +454,21 @@ Return ONLY JSON:
         json_match = re.search(r'\{.*\}', result, re.DOTALL)
         if json_match:
             parsed = json.loads(json_match.group())
+            
+            # HYBRID APPROACH: If LLM says GENERAL, double-check with fallback
+            # This catches cases like "i want to order 1 ella dress s size" that LLM might miss
+            if parsed.get("intent") == "GENERAL":
+                fallback_result = fallback_classify(query, product_names, current_product)
+                # If fallback detects a more specific intent, use it
+                if fallback_result.get("intent") in ["ORDER_CREATE", "ORDER_CANCEL", "ORDER_MODIFY", "ORDER_TRACK", "STOCK_CHECK"]:
+                    # Merge fallback detection with any LLM-extracted values
+                    fallback_result["product_mentioned"] = parsed.get("product_mentioned") or fallback_result.get("product_mentioned")
+                    fallback_result["size"] = parsed.get("size") or fallback_result.get("size")
+                    fallback_result["color"] = parsed.get("color") or fallback_result.get("color")
+                    return fallback_result
+            
             return parsed
-        return {"intent": "GENERAL"}
+        return fallback_classify(query, product_names, current_product)
     except Exception as e:
         print("OpenAI classification error: {}".format(e))
         return fallback_classify(query, product_names, current_product)
@@ -455,31 +482,60 @@ def fallback_classify(query: str, product_names: List[str], current_product: Opt
     ref_words = ['this', 'it', 'that', 'the item', 'same', 'above']
     refers_to_current = any(word in q for word in ref_words)
     
-    # Find product mention
+    # Find product mention - IMPROVED to handle "X instead of Y" pattern
     product_mentioned = None
-    for name in product_names:
-        if name.lower() in q:
-            product_mentioned = name
-            break
+    
+    # Special handling for "instead of" pattern - take the FIRST product (what user wants)
+    if 'instead of' in q:
+        # Split at "instead of" and search in the first part
+        first_part = q.split('instead of')[0]
+        for name in product_names:
+            if name.lower() in first_part:
+                product_mentioned = name
+                break
+    
+    # If not found with "instead of" pattern, search normally
+    if not product_mentioned:
+        for name in product_names:
+            if name.lower() in q:
+                product_mentioned = name
+                break
     
     # If referring to current product
     if not product_mentioned and refers_to_current and current_product:
         product_mentioned = current_product
     
-    # Extract size
+    # Extract size - IMPROVED pattern matching
     size = None
-    size_map = {
-        'xs': 'XS', 'extra small': 'XS',
-        's size': 'S', 'size s': 'S', 'small': 'S',
-        'm size': 'M', 'size m': 'M', 'medium': 'M',
-        'l size': 'L', 'size l': 'L', 'large': 'L',
-        'xl': 'XL', 'extra large': 'XL',
-        'free size': 'Free Size'
-    }
-    for pattern, sz in size_map.items():
-        if pattern in q:
-            size = sz
+    import re
+    # Check for standalone size letters (with word boundaries)
+    size_patterns = [
+        (r'\bxs\b', 'XS'),
+        (r'\bextra\s*small\b', 'XS'),
+        (r'\bs\s+size\b|\bsize\s+s\b|\bsmall\b', 'S'),
+        (r'\bm\s+size\b|\bsize\s+m\b|\bmedium\b', 'M'),
+        (r'\bl\s+size\b|\bsize\s+l\b|\blarge\b', 'L'),
+        (r'\bxl\b|\bextra\s*large\b', 'XL'),
+        (r'\bfree\s*size\b', 'Free Size'),
+        (r'\b(36|37|38|39|40|41|42)\b', None),  # Shoe sizes
+    ]
+    for pattern, sz in size_patterns:
+        match = re.search(pattern, q)
+        if match:
+            if sz:
+                size = sz
+            else:
+                size = match.group(1) if match.lastindex else match.group()
             break
+    
+    # Also check for "s size" pattern at end of sentence (common in user queries)
+    if not size:
+        if q.endswith(' s') or ' s size' in q or ' s,' in q:
+            size = 'S'
+        elif q.endswith(' m') or ' m size' in q or ' m,' in q:
+            size = 'M'
+        elif q.endswith(' l') or ' l size' in q or ' l,' in q:
+            size = 'L'
     
     # Extract color
     color = None
@@ -567,16 +623,25 @@ def fallback_classify(query: str, product_names: List[str], current_product: Opt
     # Order modification
     elif any(m in q for m in ['change order', 'change my order', 'modify order', 'update order', 'edit order']):
         result["intent"] = "ORDER_MODIFY"
-    # Order creation - must have product context
-    elif any(o in q for o in ['i want to order', 'like to order', 'would like to order', 'place order', 'buy this', 'purchase']) and (product_mentioned or refers_to_current):
-        result["intent"] = "ORDER_CREATE"
-    # User profile
+    # User profile - check before order create
     elif any(u in q for u in ['my profile', 'my account', 'my info', 'my address', 'update profile', 'customer info']):
         result["intent"] = "USER_PROFILE"
+    # Stock check - IMPORTANT: check before order create to avoid false positives
+    elif any(s in q for s in ['in stock', 'available', 'do you have', 'stock for']) and not is_category_query:
+        result["intent"] = "STOCK_CHECK"
+    # Order creation - IMPROVED DETECTION
+    # Detect: "i want to order", "i want 1 ella dress", "order the luna dress", "buy this", "i want X instead of Y"
+    elif (any(o in q for o in ['want to order', 'like to order', 'would like to order', 'place order', 
+                               'buy this', 'i want to buy', 'i want to get', 'order this',
+                               'i want 1', 'i want 2', 'order 1', 'order 2', 'buy 1', 'buy 2',
+                               'i\'d like to order', 'can i order', 'can i buy', 'i\'ll take',
+                               'i want the', 'i\'ll get the', 'i\'ll have the', 'purchase', 'instead of'])
+          or (any(o in q for o in ['order', 'buy', 'want', 'get']) and product_mentioned)
+          or bool(re.search(r'i want \d+|order \d+|buy \d+|\d+\s*(pcs|pieces|units)?\s*(dress|jumpsuit|heel|bag|top|set)', q))
+          or (refers_to_current and any(o in q for o in ['order', 'buy', 'purchase', 'want this', 'want it', 'i\'ll take', 'get this', 'get it']))):
+        result["intent"] = "ORDER_CREATE"
     elif is_attribute_question:
         result["intent"] = "PRODUCT_INFO"
-    elif any(s in q for s in ['in stock', 'available', 'do you have']) and not is_category_query:
-        result["intent"] = "STOCK_CHECK"
     elif any(p in q for p in ['how much', 'price', 'cost']) and is_fashion_related:
         result["intent"] = "PRICE_CHECK"
     elif any(i in q for i in ['tell me about', 'what is', 'describe']) and product_mentioned:
@@ -1218,25 +1283,40 @@ def main():
             show_products = []
             response_placeholder = st.empty()
             
-            # Get product
-            product = find_product(product_mentioned, products) if product_mentioned else None
+            # Get product - PRIORITY: mentioned > current_product from context
+            product = None
+            if product_mentioned:
+                product = find_product(product_mentioned, products)
             
-            # Update context
-            if product:
+            # If no product found but we have current_product in context, use it
+            # This handles "do you have stock for s size?" after discussing a product
+            if not product and st.session_state.current_product:
+                # Check if query refers to current context (this, it, the dress, etc.)
+                context_words = ['this', 'it', 'that', 'the dress', 'the item', 'for s size', 'for m size', 
+                                'for size', 'in stock', 'available', 'other color', 'different size']
+                if any(cw in query.lower() for cw in context_words) or intent in ['STOCK_CHECK', 'PRODUCT_INFO', 'PRICE_CHECK']:
+                    product = find_product(st.session_state.current_product, products)
+            
+            # Update context if we found a new product
+            if product and product.get('product_name') != st.session_state.current_product:
                 st.session_state.current_product = product.get('product_name')
             
             client = get_openai_client()
             
             # === STOCK CHECK ===
             if intent == "STOCK_CHECK":
+                # If no product but we have current_product, use it
+                if not product and st.session_state.current_product:
+                    product = find_product(st.session_state.current_product, products)
+                
                 if product:
                     fresh_stock = reload_stock()
                     stock_info = get_stock_info(product, fresh_stock, size_mentioned, color_mentioned)
                     
                     if client:
                         messages = [
-                            {"role": "system", "content": "Provide stock info professionally."},
-                            {"role": "user", "content": "Query: {}\nStock Info: {}".format(query, stock_info)}
+                            {"role": "system", "content": f"You are a helpful fashion assistant. The user is asking about {product.get('product_name')}. Provide stock info professionally."},
+                            {"role": "user", "content": "Query: {}\nProduct: {}\nStock Info: {}".format(query, product.get('product_name'), stock_info)}
                         ]
                         response = stream_response(client, messages, response_placeholder) or stock_info
                     else:
@@ -1342,9 +1422,53 @@ Is there anything else I can help you with?"""
             elif intent == "ORDER_CREATE":
                 order_manager = get_order_manager()
                 
-                if product and order_manager:
-                    size_to_order = size_mentioned or 'M'
+                # If no product found yet, try to extract from query directly
+                if not product:
+                    # Try to find product name in the query (case insensitive)
+                    q_lower = query.lower()
+                    for pname in product_names:
+                        if pname.lower() in q_lower:
+                            product = find_product(pname, products)
+                            if product:
+                                st.session_state.current_product = product.get('product_name')
+                                break
+                
+                # Still no product? Try current_product from context
+                if not product and st.session_state.current_product:
+                    product = find_product(st.session_state.current_product, products)
+                
+                # Extract size from query if not already detected
+                if not size_mentioned:
+                    size_patterns = [
+                        (r'\bxs\b|extra small', 'XS'),
+                        (r'\bs\s+size|\bsize\s+s\b|\bs\b(?!\w)', 'S'),
+                        (r'\bm\s+size|\bsize\s+m\b|\bmedium\b', 'M'),
+                        (r'\bl\s+size|\bsize\s+l\b|\blarge\b', 'L'),
+                        (r'\bxl\b|extra large', 'XL'),
+                        (r'\bfree\s*size\b', 'Free Size'),
+                        (r'\b(36|37|38|39|40|41|42)\b', None)  # Shoe sizes
+                    ]
+                    q_lower = query.lower()
+                    for pattern, size in size_patterns:
+                        match = re.search(pattern, q_lower)
+                        if match:
+                            if size:
+                                size_mentioned = size
+                            else:
+                                size_mentioned = match.group(1) if match.lastindex else match.group()
+                            break
+                
+                if product:
+                    size_to_order = size_mentioned or product.get('size_options', 'M').split(',')[0].strip()
                     color_to_order = color_mentioned or product.get('colors_available', 'Default').split(',')[0].strip()
+                    
+                    # Extract quantity if mentioned (e.g., "2 dresses", "1 ella dress")
+                    quantity = 1
+                    qty_match = re.search(r'(\d+)\s*(pcs|pieces|units|items|dress|jumpsuit|heel|bag)?', query.lower())
+                    if qty_match:
+                        qty = int(qty_match.group(1))
+                        if 1 <= qty <= 10:
+                            quantity = qty
                     
                     # Store pending order
                     st.session_state.pending_order_action = {
@@ -1353,17 +1477,20 @@ Is there anything else I can help you with?"""
                             'product': product,
                             'size': size_to_order,
                             'color': color_to_order,
-                            'quantity': 1
+                            'quantity': quantity
                         }
                     }
+                    
+                    total_price = product.get('price_min', 0) * quantity
                     
                     response = f"""📝 **Order Summary**
 
 • **Product:** {product.get('product_name')}
+• **Product ID:** {product.get('product_id')}
 • **Size:** {size_to_order}
 • **Color:** {color_to_order}
-• **Quantity:** 1
-• **Price:** {product.get('price_currency', 'MYR')} {product.get('price_min', 0):.2f}
+• **Quantity:** {quantity}
+• **Price:** {product.get('price_currency', 'MYR')} {total_price:.2f}
 
 ⚠️ **To confirm your order, please type:** `ORDER`
 
@@ -1371,14 +1498,15 @@ _Type anything else to cancel._"""
                     response_placeholder.markdown(response)
                     show_products = [product]
                 else:
-                    response = """I'd love to help you place an order! 
+                    # No product found - ask user to specify
+                    response = """📝 I'd love to help you place an order!
 
-Could you please specify:
-• Which product you'd like to order
-• Size preference
-• Color preference
+Please specify which product you'd like, including:
+• **Product name** (e.g., Luna Dress, Ella Dress, Kylie Jumpsuit)
+• **Size** (XS, S, M, L, XL or shoe size 36-42)
+• **Color** (optional)
 
-For example: "I want to order the Luna Dress in size M, White" """
+**Example:** "I want to order the Luna Dress in size S, White" """
                     response_placeholder.markdown(response)
             
             # === ORDER CANCEL ===
