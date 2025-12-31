@@ -1,0 +1,1169 @@
+"""
+ByNoemie Multi-Agent Chatbot Architecture
+
+Agents:
+1. RouterAgent - Routes queries to appropriate specialist agent
+2. DeflectionAgent - Handles off-topic, greetings, thanks
+3. InfoAgent - Product info, recommendations, stock, policy, tracking
+4. ActionAgent - Order create/modify/cancel with validation
+5. ConfirmationAgent - Handles ORDER/DELETE/CHANGE confirmations
+
+All agents share conversation history and state.
+"""
+
+import json
+import re
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class AgentType(Enum):
+    DEFLECTION = "deflection"
+    INFO = "info"
+    ACTION = "action"
+    CONFIRMATION = "confirmation"
+
+
+@dataclass
+class SharedState:
+    """Shared state across all agents"""
+    conversation_history: List[Dict] = field(default_factory=list)
+    current_product: Optional[str] = None
+    current_product_data: Optional[Dict] = None
+    current_user_id: str = "USR-001"
+    pending_action: Optional[Dict] = None  # {type: create/modify/cancel, data: {...}}
+    last_shown_products: List[Dict] = field(default_factory=list)
+    
+    def add_message(self, role: str, content: str, metadata: Dict = None):
+        """Add message to conversation history"""
+        msg = {"role": role, "content": content}
+        if metadata:
+            msg["metadata"] = metadata
+        self.conversation_history.append(msg)
+    
+    def get_recent_history(self, n: int = 10) -> List[Dict]:
+        """Get recent conversation history"""
+        return self.conversation_history[-n:]
+    
+    def set_current_product(self, product: Dict):
+        """Set current product context"""
+        self.current_product = product.get('product_name')
+        self.current_product_data = product
+    
+    def clear_pending_action(self):
+        """Clear pending action after completion"""
+        self.pending_action = None
+
+
+@dataclass
+class AgentResponse:
+    """Standard response from any agent"""
+    message: str
+    products_to_show: List[Dict] = field(default_factory=list)
+    action_completed: bool = False
+    requires_confirmation: bool = False
+    metadata: Dict = field(default_factory=dict)
+
+
+# =============================================================================
+# ROUTER AGENT - Decides which agent to use
+# =============================================================================
+class RouterAgent:
+    """
+    Analyzes user query and conversation context to route to appropriate agent.
+    Uses LLM for intelligent routing with fallback to keyword matching.
+    """
+    
+    def __init__(self, openai_client, product_names: List[str]):
+        self.client = openai_client
+        self.product_names = product_names
+    
+    def route(self, query: str, state: SharedState) -> Tuple[AgentType, Dict]:
+        """
+        Route query to appropriate agent.
+        Returns: (AgentType, extracted_info)
+        """
+        q = query.strip()
+        q_lower = q.lower()
+        
+        # 1. Check for EXACT confirmation keywords first
+        if q.upper() in ["ORDER", "DELETE", "CHANGE"]:
+            return AgentType.CONFIRMATION, {"confirm_type": q.upper()}
+        
+        # 2. Use LLM for intelligent routing
+        if self.client:
+            result = self._llm_route(query, state)
+            if result:
+                return result
+        
+        # 3. Fallback to keyword-based routing
+        return self._keyword_route(q_lower, state)
+    
+    def _llm_route(self, query: str, state: SharedState) -> Optional[Tuple[AgentType, Dict]]:
+        """Use LLM for intelligent routing"""
+        
+        # Build context
+        current_product = state.current_product or "None"
+        pending_action = state.pending_action
+        pending_str = f"Pending: {pending_action['type']} for {pending_action.get('data', {}).get('product_name', 'unknown')}" if pending_action else "None"
+        
+        system_prompt = f"""You are a router for a fashion boutique chatbot. Analyze the query and decide which agent should handle it.
+
+CURRENT CONTEXT:
+- Current Product: {current_product}
+- Pending Action: {pending_str}
+- Recent Products Discussed: {', '.join([p.get('product_name', '') for p in state.last_shown_products[-3:]]) or 'None'}
+
+AGENTS:
+1. DEFLECTION - For off-topic questions, greetings (hi, hello), thanks, goodbye, non-fashion questions
+2. INFO - For product info, recommendations, stock checks, colors, sizes, prices, policies, order tracking
+3. ACTION - For creating orders, modifying orders, canceling orders, updating profile
+4. CONFIRMATION - ONLY when user types exactly "ORDER", "DELETE", or "CHANGE"
+
+RULES:
+1. If user refers to "this", "it", "the dress" without naming a product → Use current product context
+2. "other colors for this?" → INFO (asking about current product)
+3. "i want to order..." / "buy..." / "purchase..." → ACTION
+4. "cancel order" / "modify order" / "change order" → ACTION
+5. "track order" / "order status" / "where is my order" → INFO
+6. Questions about weather, food, general knowledge → DEFLECTION
+
+AVAILABLE PRODUCTS: {', '.join(self.product_names[:15])}
+
+Return JSON only:
+{{"agent": "DEFLECTION/INFO/ACTION/CONFIRMATION", "product_mentioned": "product name or null", "size": "S/M/L/etc or null", "color": "color or null", "order_id": "ORD-XXX or null", "reason": "brief reason"}}"""
+
+        messages = [
+            {"role": "system", "content": system_prompt}
+        ]
+        
+        # Add recent conversation for context
+        for msg in state.get_recent_history(6):
+            messages.append({"role": msg["role"], "content": msg["content"][:300]})
+        
+        messages.append({"role": "user", "content": f"Route this query: {query}"})
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=150,
+                temperature=0.1
+            )
+            
+            result = response.choices[0].message.content
+            json_match = re.search(r'\{.*\}', result, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                agent_str = parsed.get("agent", "INFO").upper()
+                
+                # Map to AgentType
+                agent_map = {
+                    "DEFLECTION": AgentType.DEFLECTION,
+                    "INFO": AgentType.INFO,
+                    "ACTION": AgentType.ACTION,
+                    "CONFIRMATION": AgentType.CONFIRMATION
+                }
+                agent_type = agent_map.get(agent_str, AgentType.INFO)
+                
+                # Extract info
+                extracted = {
+                    "product_mentioned": parsed.get("product_mentioned"),
+                    "size": parsed.get("size"),
+                    "color": parsed.get("color"),
+                    "order_id": parsed.get("order_id"),
+                    "reason": parsed.get("reason")
+                }
+                
+                # If no product mentioned but refers to current context
+                if not extracted["product_mentioned"] and state.current_product:
+                    q_lower = query.lower()
+                    if any(w in q_lower for w in ['this', 'it', 'that', 'the dress', 'the item', 'for this', 'other color', 'other size']):
+                        extracted["product_mentioned"] = state.current_product
+                
+                return agent_type, extracted
+                
+        except Exception as e:
+            print(f"Router LLM error: {e}")
+        
+        return None
+    
+    def _keyword_route(self, q: str, state: SharedState) -> Tuple[AgentType, Dict]:
+        """Fallback keyword-based routing"""
+        
+        extracted = {
+            "product_mentioned": None,
+            "size": None,
+            "color": None,
+            "order_id": None
+        }
+        
+        # Extract product mention
+        for name in self.product_names:
+            if name.lower() in q:
+                extracted["product_mentioned"] = name
+                break
+        
+        # If no product but refers to current
+        if not extracted["product_mentioned"] and state.current_product:
+            if any(w in q for w in ['this', 'it', 'that', 'the dress', 'the item', 'for this']):
+                extracted["product_mentioned"] = state.current_product
+        
+        # Extract size
+        size_patterns = [
+            (r'\bxs\b', 'XS'), (r'\bs\b(?!\w)', 'S'), (r'\bm\b(?!\w)', 'M'),
+            (r'\bl\b(?!\w)', 'L'), (r'\bxl\b', 'XL'), (r'\b(36|37|38|39|40|41|42)\b', None)
+        ]
+        for pattern, size in size_patterns:
+            match = re.search(pattern, q)
+            if match:
+                extracted["size"] = size or match.group(1)
+                break
+        
+        # Extract color
+        colors = ['black', 'white', 'beige', 'red', 'pink', 'gold', 'navy', 'cream', 'maroon', 'nude']
+        for c in colors:
+            if c in q:
+                extracted["color"] = c.capitalize()
+                break
+        
+        # Extract order ID
+        order_match = re.search(r'ord-?\d{3}', q, re.IGNORECASE)
+        if order_match:
+            extracted["order_id"] = order_match.group().upper().replace('ORD', 'ORD-') if '-' not in order_match.group() else order_match.group().upper()
+        
+        # Determine agent
+        # Greetings/Thanks/Goodbye
+        if any(w in q for w in ['hello', 'hi', 'hey']) and len(q.split()) < 5:
+            return AgentType.DEFLECTION, extracted
+        if any(w in q for w in ['thank', 'thanks', 'bye', 'goodbye']):
+            return AgentType.DEFLECTION, extracted
+        
+        # Off-topic check
+        fashion_words = ['dress', 'jumpsuit', 'heel', 'bag', 'top', 'set', 'stock', 'order', 'buy',
+                         'price', 'size', 'color', 'colour', 'ship', 'return', 'refund', 'track',
+                         'recommend', 'show', 'style', 'fashion', 'wear', 'outfit', 'occasion']
+        if not any(w in q for w in fashion_words) and not extracted["product_mentioned"]:
+            return AgentType.DEFLECTION, extracted
+        
+        # Action intents
+        action_keywords = ['want to order', 'i want', 'buy', 'purchase', 'place order', 
+                          'cancel order', 'cancel my order', 'modify order', 'change order',
+                          'update order', 'delete order', 'update profile', 'change my']
+        if any(w in q for w in action_keywords):
+            return AgentType.ACTION, extracted
+        
+        # Info intents (default for fashion queries)
+        return AgentType.INFO, extracted
+
+
+# =============================================================================
+# DEFLECTION AGENT - Handles off-topic, greetings, thanks
+# =============================================================================
+class DeflectionAgent:
+    """
+    Handles:
+    - Greetings (hi, hello)
+    - Thanks
+    - Goodbye
+    - Off-topic questions (politely redirects)
+    """
+    
+    def __init__(self, openai_client=None):
+        self.client = openai_client
+    
+    def handle(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        q = query.lower().strip()
+        
+        # Greetings
+        if any(w in q for w in ['hello', 'hi', 'hey', 'good morning', 'good afternoon']):
+            return AgentResponse(
+                message="Hello! 👋 Welcome to ByNoemie! I'm here to help you find the perfect outfit. Are you looking for dresses, jumpsuits, heels, or something else today?",
+                metadata={"intent": "greeting"}
+            )
+        
+        # Thanks
+        if any(w in q for w in ['thank', 'thanks']):
+            return AgentResponse(
+                message="You're welcome! 💕 Is there anything else I can help you with? Feel free to ask about our dresses, heels, or any other items!",
+                metadata={"intent": "thanks"}
+            )
+        
+        # Goodbye
+        if any(w in q for w in ['bye', 'goodbye', 'see you', 'take care']):
+            return AgentResponse(
+                message="Goodbye! 👋 Thank you for visiting ByNoemie. Come back soon for more fabulous fashion! 💕",
+                metadata={"intent": "goodbye"}
+            )
+        
+        # Off-topic - Use LLM for natural response or fallback
+        if self.client:
+            try:
+                messages = [
+                    {"role": "system", "content": """You are a friendly fashion boutique assistant. 
+The user asked something off-topic (not about fashion/shopping). 
+Politely acknowledge their question, explain you're a fashion assistant, and redirect to fashion topics.
+Keep it friendly and brief (2-3 sentences max)."""},
+                    {"role": "user", "content": query}
+                ]
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    max_tokens=100,
+                    temperature=0.7
+                )
+                return AgentResponse(
+                    message=response.choices[0].message.content,
+                    metadata={"intent": "off_topic"}
+                )
+            except:
+                pass
+        
+        # Fallback
+        return AgentResponse(
+            message="I'm ByNoemie's fashion assistant, so I specialize in helping you find the perfect outfit! 👗 Would you like me to show you our dresses, jumpsuits, or heels?",
+            metadata={"intent": "off_topic"}
+        )
+
+
+# =============================================================================
+# INFO AGENT - Product info, recommendations, stock, policy, tracking
+# =============================================================================
+class InfoAgent:
+    """
+    Handles:
+    - Product recommendations
+    - Product info (colors, sizes, materials, price)
+    - Stock availability
+    - Policy questions (shipping, returns)
+    - Order tracking/status
+    """
+    
+    def __init__(self, openai_client, products: List[Dict], stock_data: Dict, 
+                 order_manager=None, policy_rag=None):
+        self.client = openai_client
+        self.products = products
+        self.stock_data = stock_data
+        self.order_manager = order_manager
+        self.policy_rag = policy_rag
+        
+        # Build product lookup
+        self.product_lookup = {p['product_name'].lower(): p for p in products}
+    
+    def handle(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        q = query.lower()
+        
+        # Determine sub-intent
+        if any(w in q for w in ['track', 'where is my order', 'order status', 'check order', 'my order']):
+            return self._handle_order_tracking(query, state, extracted)
+        
+        if any(w in q for w in ['return', 'refund', 'exchange', 'shipping', 'delivery', 'policy']):
+            return self._handle_policy(query, state)
+        
+        if any(w in q for w in ['recommend', 'suggest', 'show me', 'looking for', 'browse', 'what do you have']):
+            return self._handle_recommendation(query, state, extracted)
+        
+        if any(w in q for w in ['stock', 'available', 'in stock', 'do you have']):
+            return self._handle_stock_check(query, state, extracted)
+        
+        if any(w in q for w in ['price', 'cost', 'how much']):
+            return self._handle_price(query, state, extracted)
+        
+        if any(w in q for w in ['color', 'colour', 'size', 'material', 'fabric', 'tell me about', 'what is']):
+            return self._handle_product_info(query, state, extracted)
+        
+        # Default: treat as product inquiry
+        return self._handle_product_info(query, state, extracted)
+    
+    def _find_product(self, name: str) -> Optional[Dict]:
+        """Find product by name (case insensitive, partial match)"""
+        if not name:
+            return None
+        name_lower = name.lower()
+        # Exact match
+        if name_lower in self.product_lookup:
+            return self.product_lookup[name_lower]
+        # Partial match
+        for pname, product in self.product_lookup.items():
+            if name_lower in pname or pname in name_lower:
+                return product
+        return None
+    
+    def _handle_order_tracking(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        """Handle order tracking queries"""
+        order_id = extracted.get('order_id')
+        
+        if not self.order_manager:
+            return AgentResponse(message="Order tracking is currently unavailable. Please contact support.")
+        
+        if order_id:
+            tracking_info = self.order_manager.track_order(order_id)
+            return AgentResponse(message=tracking_info, metadata={"order_id": order_id})
+        
+        # No order ID - show recent orders
+        user_orders = self.order_manager.get_orders_by_user(state.current_user_id)
+        if user_orders:
+            orders_list = "\n".join([
+                f"• **{o['order_id']}**: {o['product_name']} - {o['status'].replace('_', ' ').title()}"
+                for o in user_orders[:5]
+            ])
+            return AgentResponse(
+                message=f"📦 **Your Recent Orders:**\n\n{orders_list}\n\nWhich order would you like to track? (e.g., 'Track ORD-001')"
+            )
+        
+        return AgentResponse(message="I couldn't find any orders. Please provide your order ID (e.g., ORD-001).")
+    
+    def _handle_policy(self, query: str, state: SharedState) -> AgentResponse:
+        """Handle policy questions using RAG if available"""
+        if self.policy_rag:
+            try:
+                answer = self.policy_rag.query(query)
+                return AgentResponse(message=answer)
+            except:
+                pass
+        
+        # Fallback policy responses
+        q = query.lower()
+        if 'return' in q or 'refund' in q:
+            return AgentResponse(message="📋 **Return Policy**: Items can be returned within 14 days of delivery. Please contact us at support@bynoemie.com with your order number.")
+        if 'shipping' in q or 'delivery' in q:
+            return AgentResponse(message="🚚 **Shipping**: We ship within Malaysia. Standard delivery takes 3-7 business days. Express delivery (1-3 days) available for select areas.")
+        
+        return AgentResponse(message="For policy questions, please visit our website or contact support@bynoemie.com")
+    
+    def _handle_recommendation(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        """Handle product recommendations"""
+        q = query.lower()
+        
+        # Determine category
+        category = None
+        if any(w in q for w in ['dress', 'dresses', 'gown']):
+            category = 'Dress'
+        elif any(w in q for w in ['jumpsuit', 'romper']):
+            category = 'jumpsuits'
+        elif any(w in q for w in ['heel', 'heels', 'shoe', 'shoes']):
+            category = 'Heel'
+        elif any(w in q for w in ['bag', 'bags', 'clutch', 'purse']):
+            category = 'bag'
+        
+        # Filter products
+        if category:
+            matching = [p for p in self.products if category.lower() in p.get('product_type', '').lower() 
+                       or category.lower() in p.get('product_collection', '').lower()]
+        else:
+            matching = self.products
+        
+        # Sort by popularity or newness (using created_at)
+        matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:5]
+        
+        if matching:
+            # Update state
+            state.last_shown_products = matching
+            if len(matching) == 1:
+                state.set_current_product(matching[0])
+            
+            # Build response
+            if self.client:
+                product_info = "\n".join([
+                    f"- {p['product_name']}: MYR {p.get('price_min', 0)}, {p.get('colors_available', 'N/A')}"
+                    for p in matching
+                ])
+                try:
+                    messages = [
+                        {"role": "system", "content": "You are a helpful fashion assistant. Present these products naturally and engagingly. Be concise (3-4 sentences max)."},
+                        {"role": "user", "content": f"User asked: {query}\n\nProducts:\n{product_info}"}
+                    ]
+                    response = self.client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=messages,
+                        max_tokens=200,
+                        temperature=0.7
+                    )
+                    return AgentResponse(
+                        message=response.choices[0].message.content,
+                        products_to_show=matching
+                    )
+                except:
+                    pass
+            
+            return AgentResponse(
+                message=f"Here are some options for you! 👗",
+                products_to_show=matching
+            )
+        
+        return AgentResponse(message="I couldn't find products matching your criteria. Would you like to see our latest arrivals?")
+    
+    def _handle_stock_check(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        """Handle stock availability queries"""
+        product_name = extracted.get('product_mentioned')
+        product = self._find_product(product_name)
+        
+        # If no product specified, use current context
+        if not product and state.current_product:
+            product = self._find_product(state.current_product)
+        
+        if not product:
+            return AgentResponse(
+                message="Which product would you like me to check stock for? Please mention the product name."
+            )
+        
+        # Update context
+        state.set_current_product(product)
+        
+        # Get stock info
+        size = extracted.get('size')
+        color = extracted.get('color')
+        
+        stock_info = self._get_stock_info(product, size, color)
+        
+        if self.client:
+            try:
+                messages = [
+                    {"role": "system", "content": f"You are a helpful fashion assistant. Answer about {product['product_name']} stock. Be concise and helpful."},
+                    {"role": "user", "content": f"Query: {query}\nProduct: {product['product_name']}\nStock Info: {stock_info}"}
+                ]
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    max_tokens=150,
+                    temperature=0.7
+                )
+                return AgentResponse(
+                    message=response.choices[0].message.content,
+                    products_to_show=[product]
+                )
+            except:
+                pass
+        
+        return AgentResponse(message=stock_info, products_to_show=[product])
+    
+    def _handle_price(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        """Handle price queries"""
+        product_name = extracted.get('product_mentioned')
+        product = self._find_product(product_name) or (self._find_product(state.current_product) if state.current_product else None)
+        
+        if product:
+            state.set_current_product(product)
+            price = product.get('price_min', 0)
+            currency = product.get('price_currency', 'MYR')
+            return AgentResponse(
+                message=f"The **{product['product_name']}** is priced at **{currency} {price:.2f}**. Would you like to order it?",
+                products_to_show=[product]
+            )
+        
+        return AgentResponse(message="Which product's price would you like to know?")
+    
+    def _handle_product_info(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        """Handle general product info queries"""
+        product_name = extracted.get('product_mentioned')
+        product = self._find_product(product_name)
+        
+        # If no product but we have current context
+        if not product and state.current_product:
+            product = self._find_product(state.current_product)
+        
+        if not product:
+            # Search in query for any product name
+            for p in self.products:
+                if p['product_name'].lower() in query.lower():
+                    product = p
+                    break
+        
+        if product:
+            state.set_current_product(product)
+            
+            # Build product info
+            info = {
+                "name": product['product_name'],
+                "price": f"{product.get('price_currency', 'MYR')} {product.get('price_min', 0)}",
+                "colors": product.get('colors_available', 'N/A'),
+                "sizes": product.get('size_options', 'N/A'),
+                "material": product.get('material', 'N/A'),
+                "description": product.get('product_description', '')[:200]
+            }
+            
+            if self.client:
+                try:
+                    messages = [
+                        {"role": "system", "content": "You are a helpful fashion assistant. Provide product info naturally. Focus on what the user asked about."},
+                        {"role": "user", "content": f"Query: {query}\nProduct Info: {json.dumps(info)}"}
+                    ]
+                    response = self.client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=messages,
+                        max_tokens=200,
+                        temperature=0.7
+                    )
+                    return AgentResponse(
+                        message=response.choices[0].message.content,
+                        products_to_show=[product]
+                    )
+                except:
+                    pass
+            
+            return AgentResponse(
+                message=f"**{info['name']}** - {info['price']}\n\nColors: {info['colors']}\nSizes: {info['sizes']}\n\n{info['description']}",
+                products_to_show=[product]
+            )
+        
+        return AgentResponse(message="Which product would you like to know more about?")
+    
+    def _get_stock_info(self, product: Dict, size: str = None, color: str = None) -> str:
+        """Get stock information for a product"""
+        product_handle = product.get('product_handle', '')
+        stock = self.stock_data.get(product_handle, {})
+        
+        if not stock:
+            return f"{product['product_name']} - Stock information not available. Please contact us."
+        
+        available_sizes = product.get('size_options', '').split(',')
+        available_colors = product.get('colors_available', '').split(',')
+        
+        info = f"**{product['product_name']}**\n"
+        info += f"Available sizes: {', '.join([s.strip() for s in available_sizes])}\n"
+        info += f"Available colors: {', '.join([c.strip() for c in available_colors])}\n"
+        
+        if size:
+            info += f"\nSize {size}: {'In Stock ✅' if size.upper() in [s.strip().upper() for s in available_sizes] else 'May be limited'}"
+        
+        return info
+
+
+# =============================================================================
+# ACTION AGENT - Order create/modify/cancel with validation
+# =============================================================================
+class ActionAgent:
+    """
+    Handles actions that modify data:
+    - Create order (with stock/color validation)
+    - Modify order (with status + stock check)
+    - Cancel order (with status check)
+    - Update profile
+    
+    Always validates before action and requires confirmation.
+    """
+    
+    def __init__(self, openai_client, products: List[Dict], stock_data: Dict,
+                 order_manager=None, user_manager=None):
+        self.client = openai_client
+        self.products = products
+        self.stock_data = stock_data
+        self.order_manager = order_manager
+        self.user_manager = user_manager
+        
+        self.product_lookup = {p['product_name'].lower(): p for p in products}
+    
+    def handle(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        q = query.lower()
+        
+        # Determine action type
+        if any(w in q for w in ['cancel order', 'cancel my order', 'delete order']):
+            return self._handle_cancel_order(query, state, extracted)
+        
+        if any(w in q for w in ['modify order', 'change order', 'update order', 'edit order']):
+            return self._handle_modify_order(query, state, extracted)
+        
+        if any(w in q for w in ['update profile', 'change my address', 'update my info']):
+            return self._handle_update_profile(query, state, extracted)
+        
+        # Default: Create order
+        return self._handle_create_order(query, state, extracted)
+    
+    def _find_product(self, name: str) -> Optional[Dict]:
+        if not name:
+            return None
+        name_lower = name.lower()
+        if name_lower in self.product_lookup:
+            return self.product_lookup[name_lower]
+        for pname, product in self.product_lookup.items():
+            if name_lower in pname or pname in name_lower:
+                return product
+        return None
+    
+    def _handle_create_order(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        """
+        Handle order creation with validation:
+        1. Find product
+        2. Validate size exists
+        3. Validate color exists
+        4. Check stock (optional)
+        5. Store pending action
+        6. Ask for confirmation
+        """
+        # Find product
+        product_name = extracted.get('product_mentioned')
+        product = self._find_product(product_name)
+        
+        # Try to find from query if not in extracted
+        if not product:
+            for p in self.products:
+                if p['product_name'].lower() in query.lower():
+                    product = p
+                    break
+        
+        # Use current context if no product found
+        if not product and state.current_product:
+            product = self._find_product(state.current_product)
+        
+        if not product:
+            return AgentResponse(
+                message="""📝 I'd love to help you place an order!
+
+Please specify the product you'd like to order. For example:
+• "I want to order the Luna Dress in size S, White"
+• "Order the Ella Dress"
+
+What would you like to order?"""
+            )
+        
+        # Update context
+        state.set_current_product(product)
+        
+        # Validate and get size
+        available_sizes = [s.strip() for s in product.get('size_options', 'M').split(',')]
+        size = extracted.get('size')
+        
+        # Extract size from query if not in extracted
+        if not size:
+            size_match = re.search(r'\b(xs|s|m|l|xl|36|37|38|39|40|41|42|free\s*size)\b', query.lower())
+            if size_match:
+                size = size_match.group(1).upper()
+        
+        if not size:
+            size = available_sizes[0] if available_sizes else 'M'
+        
+        # Validate size
+        size_valid = size.upper() in [s.upper() for s in available_sizes] or size in available_sizes
+        if not size_valid:
+            return AgentResponse(
+                message=f"❌ Size **{size}** is not available for {product['product_name']}.\n\nAvailable sizes: **{', '.join(available_sizes)}**\n\nPlease choose a valid size.",
+                products_to_show=[product]
+            )
+        
+        # Validate and get color
+        available_colors = [c.strip() for c in product.get('colors_available', 'Default').split(',')]
+        color = extracted.get('color')
+        
+        if not color:
+            color_match = re.search(r'\b(black|white|beige|red|pink|gold|navy|cream|maroon|nude|champagne|gray|grey)\b', query.lower())
+            if color_match:
+                color = color_match.group(1).capitalize()
+        
+        if not color:
+            color = available_colors[0] if available_colors else 'Default'
+        
+        # Validate color
+        color_valid = color.lower() in [c.lower() for c in available_colors]
+        if not color_valid and color != 'Default':
+            return AgentResponse(
+                message=f"❌ Color **{color}** is not available for {product['product_name']}.\n\nAvailable colors: **{', '.join(available_colors)}**\n\nPlease choose a valid color.",
+                products_to_show=[product]
+            )
+        
+        # Extract quantity
+        quantity = 1
+        qty_match = re.search(r'(\d+)\s*(pcs|pieces|units)?', query.lower())
+        if qty_match:
+            qty = int(qty_match.group(1))
+            if 1 <= qty <= 10:
+                quantity = qty
+        
+        # Calculate price
+        unit_price = product.get('price_min', 0)
+        total_price = unit_price * quantity
+        currency = product.get('price_currency', 'MYR')
+        
+        # Store pending action
+        state.pending_action = {
+            'type': 'create',
+            'data': {
+                'product': product,
+                'product_name': product['product_name'],
+                'product_id': product.get('product_id'),
+                'size': size,
+                'color': color,
+                'quantity': quantity,
+                'unit_price': unit_price,
+                'total_price': total_price,
+                'currency': currency
+            }
+        }
+        
+        return AgentResponse(
+            message=f"""📝 **Order Summary**
+
+• **Product:** {product['product_name']}
+• **Product ID:** {product.get('product_id')}
+• **Size:** {size} ✅
+• **Color:** {color} ✅
+• **Quantity:** {quantity}
+• **Price:** {currency} {total_price:.2f}
+
+⚠️ **To confirm your order, please type:** `ORDER`
+
+_Type anything else to cancel._""",
+            products_to_show=[product],
+            requires_confirmation=True,
+            metadata={"pending_action": "create_order"}
+        )
+    
+    def _handle_modify_order(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        """
+        Handle order modification:
+        1. Find order
+        2. Check status (must be pending/confirmed/processing)
+        3. Validate new size/color if changing
+        4. Store pending action
+        5. Ask for confirmation
+        """
+        if not self.order_manager:
+            return AgentResponse(message="Order management is currently unavailable.")
+        
+        order_id = extracted.get('order_id')
+        
+        if not order_id:
+            # List modifiable orders
+            user_orders = self.order_manager.get_orders_by_user(state.current_user_id)
+            modifiable = [o for o in user_orders if self.order_manager.can_modify_order(o['order_id'])[0]]
+            
+            if modifiable:
+                orders_list = "\n".join([f"• **{o['order_id']}**: {o['product_name']} - Size {o['size']}, {o['color']}" for o in modifiable[:5]])
+                return AgentResponse(
+                    message=f"📋 **Orders you can modify:**\n\n{orders_list}\n\nWhich order would you like to modify? (e.g., 'Change ORD-002 to size M')"
+                )
+            return AgentResponse(message="You don't have any orders that can be modified.")
+        
+        # Check if order can be modified
+        can_modify, reason = self.order_manager.can_modify_order(order_id)
+        if not can_modify:
+            return AgentResponse(message=f"❌ Cannot modify order {order_id}. {reason}")
+        
+        order = self.order_manager.get_order(order_id)
+        
+        # Extract changes
+        new_size = extracted.get('size')
+        new_color = extracted.get('color')
+        
+        # Get product for validation
+        product = self._find_product(order['product_name'])
+        
+        if new_size and product:
+            available_sizes = [s.strip() for s in product.get('size_options', '').split(',')]
+            if new_size.upper() not in [s.upper() for s in available_sizes]:
+                return AgentResponse(message=f"❌ Size {new_size} not available. Available: {', '.join(available_sizes)}")
+        
+        if new_color and product:
+            available_colors = [c.strip() for c in product.get('colors_available', '').split(',')]
+            if new_color.lower() not in [c.lower() for c in available_colors]:
+                return AgentResponse(message=f"❌ Color {new_color} not available. Available: {', '.join(available_colors)}")
+        
+        changes = {}
+        changes_desc = []
+        if new_size and new_size != order['size']:
+            changes['size'] = new_size
+            changes_desc.append(f"Size: {order['size']} → {new_size}")
+        if new_color and new_color != order['color']:
+            changes['color'] = new_color
+            changes_desc.append(f"Color: {order['color']} → {new_color}")
+        
+        if not changes:
+            return AgentResponse(
+                message=f"📋 **Order {order_id}**: {order['product_name']}\nCurrent: Size {order['size']}, {order['color']}\n\nWhat would you like to change? (e.g., 'change to size M' or 'change to black')"
+            )
+        
+        # Store pending action
+        state.pending_action = {
+            'type': 'modify',
+            'order_id': order_id,
+            'changes': changes
+        }
+        
+        return AgentResponse(
+            message=f"""✏️ **Modify Order {order_id}**
+
+**Current:** {order['product_name']} - Size {order['size']}, {order['color']}
+
+**Changes:**
+{chr(10).join(['• ' + c for c in changes_desc])}
+
+⚠️ **To confirm changes, please type:** `CHANGE`
+
+_Type anything else to cancel._""",
+            requires_confirmation=True,
+            metadata={"pending_action": "modify_order"}
+        )
+    
+    def _handle_cancel_order(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        """
+        Handle order cancellation:
+        1. Find order
+        2. Check status (cannot cancel shipped/delivered)
+        3. Store pending action
+        4. Ask for confirmation
+        """
+        if not self.order_manager:
+            return AgentResponse(message="Order management is currently unavailable.")
+        
+        order_id = extracted.get('order_id')
+        
+        if not order_id:
+            # List cancellable orders
+            user_orders = self.order_manager.get_orders_by_user(state.current_user_id)
+            cancellable = [o for o in user_orders if self.order_manager.can_cancel_order(o['order_id'])[0]]
+            
+            if cancellable:
+                orders_list = "\n".join([f"• **{o['order_id']}**: {o['product_name']} - {o['status'].replace('_', ' ').title()}" for o in cancellable[:5]])
+                return AgentResponse(
+                    message=f"📋 **Orders you can cancel:**\n\n{orders_list}\n\nWhich order would you like to cancel? (e.g., 'Cancel ORD-004')"
+                )
+            return AgentResponse(message="You don't have any orders that can be cancelled.")
+        
+        # Check if order can be cancelled
+        can_cancel, reason = self.order_manager.can_cancel_order(order_id)
+        if not can_cancel:
+            return AgentResponse(message=f"❌ Cannot cancel order {order_id}. {reason}")
+        
+        order = self.order_manager.get_order(order_id)
+        
+        # Store pending action
+        state.pending_action = {
+            'type': 'cancel',
+            'order_id': order_id
+        }
+        
+        return AgentResponse(
+            message=f"""🗑️ **Cancel Order {order_id}?**
+
+**Order Details:**
+• Product: {order['product_name']}
+• Size: {order['size']} | Color: {order['color']}
+• Price: {order['currency']} {order['total_price']:.2f}
+• Status: {order['status'].replace('_', ' ').title()}
+
+⚠️ **To confirm cancellation, please type:** `DELETE`
+
+_This action cannot be undone. Refund will be processed in 3-5 business days._""",
+            requires_confirmation=True,
+            metadata={"pending_action": "cancel_order"}
+        )
+    
+    def _handle_update_profile(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        """Handle profile update requests"""
+        return AgentResponse(
+            message="To update your profile, please contact our support team at support@bynoemie.com with your request. We'll help you update your information securely."
+        )
+
+
+# =============================================================================
+# CONFIRMATION AGENT - Handles ORDER/DELETE/CHANGE confirmations
+# =============================================================================
+class ConfirmationAgent:
+    """
+    Handles confirmation keywords: ORDER, DELETE, CHANGE
+    Executes the pending action from state.
+    """
+    
+    def __init__(self, order_manager=None, user_manager=None):
+        self.order_manager = order_manager
+        self.user_manager = user_manager
+    
+    def handle(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
+        confirm_type = extracted.get('confirm_type', query.strip().upper())
+        pending = state.pending_action
+        
+        if not pending:
+            return AgentResponse(
+                message="I don't have a pending action to confirm. How can I help you?"
+            )
+        
+        if confirm_type == "ORDER" and pending.get('type') == 'create':
+            return self._confirm_create_order(state)
+        
+        if confirm_type == "DELETE" and pending.get('type') == 'cancel':
+            return self._confirm_cancel_order(state)
+        
+        if confirm_type == "CHANGE" and pending.get('type') == 'modify':
+            return self._confirm_modify_order(state)
+        
+        return AgentResponse(
+            message=f"The confirmation '{confirm_type}' doesn't match the pending action ({pending.get('type')}). Please use the correct keyword."
+        )
+    
+    def _confirm_create_order(self, state: SharedState) -> AgentResponse:
+        """Execute order creation"""
+        if not self.order_manager:
+            state.clear_pending_action()
+            return AgentResponse(message="Order system is temporarily unavailable. Please try again later.")
+        
+        data = state.pending_action.get('data', {})
+        
+        try:
+            order = self.order_manager.create_order(
+                user_id=state.current_user_id,
+                product=data.get('product', {}),
+                size=data.get('size', 'M'),
+                color=data.get('color', 'Default'),
+                quantity=data.get('quantity', 1)
+            )
+            
+            state.clear_pending_action()
+            
+            return AgentResponse(
+                message=f"""✅ **Order Confirmed!**
+
+Your order has been placed successfully!
+
+**Order ID:** {order['order_id']}
+**Product:** {order['product_name']}
+**Size:** {order['size']} | **Color:** {order['color']}
+**Total:** {order['currency']} {order['total_price']:.2f}
+
+📧 You will receive a confirmation email shortly.
+📦 Estimated delivery: {order['estimated_delivery']}
+
+Thank you for shopping with ByNoemie! 💕""",
+                action_completed=True,
+                metadata={"order_id": order['order_id']}
+            )
+        except Exception as e:
+            state.clear_pending_action()
+            return AgentResponse(message=f"Error creating order: {str(e)}")
+    
+    def _confirm_cancel_order(self, state: SharedState) -> AgentResponse:
+        """Execute order cancellation"""
+        if not self.order_manager:
+            state.clear_pending_action()
+            return AgentResponse(message="Order system is temporarily unavailable.")
+        
+        order_id = state.pending_action.get('order_id')
+        
+        try:
+            success, message, order = self.order_manager.cancel_order(order_id)
+            state.clear_pending_action()
+            
+            if success:
+                return AgentResponse(
+                    message=f"""✅ **Order Cancelled**
+
+Order **{order_id}** has been cancelled successfully.
+
+💰 Your refund will be processed within 3-5 business days.
+
+Is there anything else I can help you with?""",
+                    action_completed=True
+                )
+            else:
+                return AgentResponse(message=f"❌ {message}")
+        except Exception as e:
+            state.clear_pending_action()
+            return AgentResponse(message=f"Error cancelling order: {str(e)}")
+    
+    def _confirm_modify_order(self, state: SharedState) -> AgentResponse:
+        """Execute order modification"""
+        if not self.order_manager:
+            state.clear_pending_action()
+            return AgentResponse(message="Order system is temporarily unavailable.")
+        
+        order_id = state.pending_action.get('order_id')
+        changes = state.pending_action.get('changes', {})
+        
+        try:
+            success, message, order = self.order_manager.modify_order(
+                order_id,
+                new_size=changes.get('size'),
+                new_color=changes.get('color'),
+                new_quantity=changes.get('quantity')
+            )
+            state.clear_pending_action()
+            
+            if success:
+                return AgentResponse(
+                    message=f"""✅ **Order Modified**
+
+Order **{order_id}** has been updated successfully.
+
+**Changes Applied:**
+{message}
+
+Is there anything else I can help you with?""",
+                    action_completed=True
+                )
+            else:
+                return AgentResponse(message=f"❌ {message}")
+        except Exception as e:
+            state.clear_pending_action()
+            return AgentResponse(message=f"Error modifying order: {str(e)}")
+
+
+# =============================================================================
+# MAIN ORCHESTRATOR
+# =============================================================================
+class ChatbotOrchestrator:
+    """
+    Main orchestrator that coordinates all agents.
+    Maintains shared state and routes queries.
+    """
+    
+    def __init__(self, openai_client, products: List[Dict], stock_data: Dict,
+                 order_manager=None, user_manager=None, policy_rag=None):
+        self.state = SharedState()
+        
+        # Extract product names
+        product_names = [p['product_name'] for p in products]
+        
+        # Initialize agents
+        self.router = RouterAgent(openai_client, product_names)
+        self.deflection_agent = DeflectionAgent(openai_client)
+        self.info_agent = InfoAgent(openai_client, products, stock_data, order_manager, policy_rag)
+        self.action_agent = ActionAgent(openai_client, products, stock_data, order_manager, user_manager)
+        self.confirmation_agent = ConfirmationAgent(order_manager, user_manager)
+        
+        self.agents = {
+            AgentType.DEFLECTION: self.deflection_agent,
+            AgentType.INFO: self.info_agent,
+            AgentType.ACTION: self.action_agent,
+            AgentType.CONFIRMATION: self.confirmation_agent
+        }
+    
+    def process(self, query: str) -> AgentResponse:
+        """
+        Process a user query:
+        1. Route to appropriate agent
+        2. Execute agent
+        3. Update state
+        4. Return response
+        """
+        # Add user message to history
+        self.state.add_message("user", query)
+        
+        # Route query
+        agent_type, extracted = self.router.route(query, self.state)
+        
+        # Get agent and process
+        agent = self.agents.get(agent_type, self.info_agent)
+        response = agent.handle(query, self.state, extracted)
+        
+        # Update state
+        self.state.add_message("assistant", response.message, {"agent": agent_type.value})
+        
+        # Update current product if products shown
+        if response.products_to_show and len(response.products_to_show) == 1:
+            self.state.set_current_product(response.products_to_show[0])
+        
+        if response.products_to_show:
+            self.state.last_shown_products = response.products_to_show
+        
+        return response
+    
+    def set_user(self, user_id: str):
+        """Set current user"""
+        self.state.current_user_id = user_id
+    
+    def get_state(self) -> SharedState:
+        """Get current state for inspection"""
+        return self.state
+    
+    def clear_state(self):
+        """Clear state for new conversation"""
+        self.state = SharedState()
