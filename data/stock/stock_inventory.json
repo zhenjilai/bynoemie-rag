@@ -411,7 +411,7 @@
   {
     "product_id": "9773314081058",
     "product_name": "Tiara Satin Dress",
-    "total_inventory": 8,
+    "total_inventory": 7,
     "variants": [
       {
         "size": "M",
@@ -423,7 +423,7 @@
       {
         "size": "S",
         "color": "White",
-        "quantity": 8,
+        "quantity": 7,
         "status": "in_stock",
         "sku": "9773314081058-S-WHI"
       }
@@ -741,37 +741,23 @@
     "last_updated": "2025-12-22T10:00:00+08:00"
   },
   {
-    "product_id": "9773311525154",
+    "product_id": "9763139191074",
     "product_name": "Monica Dress",
-    "total_inventory": 34,
+    "total_inventory": 9,
     "variants": [
       {
         "size": "M",
-        "color": "Beige",
-        "quantity": 20,
+        "color": "White",
+        "quantity": 8,
         "status": "in_stock",
-        "sku": "9773311525154-M-BEI"
+        "sku": "9763139191074-M-WHI"
       },
       {
-        "size": "M",
-        "color": "Brown",
+        "size": "S",
+        "color": "White",
         "quantity": 1,
         "status": "low_stock",
-        "sku": "9773311525154-M-BRO"
-      },
-      {
-        "size": "S",
-        "color": "Beige",
-        "quantity": 13,
-        "status": "in_stock",
-        "sku": "9773311525154-S-BEI"
-      },
-      {
-        "size": "S",
-        "color": "Brown",
-        "quantity": 0,
-        "status": "out_of_stock",
-        "sku": "9773311525154-S-BRO"
+        "sku": "9763139191074-S-WHI"
       }
     ],
     "last_restocked": "2025-12-15T10:00:00+08:00",
@@ -931,29 +917,6 @@
         "quantity": 0,
         "status": "out_of_stock",
         "sku": "9763564912930-S-WHI"
-      }
-    ],
-    "last_restocked": "2025-12-15T10:00:00+08:00",
-    "last_updated": "2025-12-22T10:00:00+08:00"
-  },
-  {
-    "product_id": "9763139191074",
-    "product_name": "Monica Dress",
-    "total_inventory": 9,
-    "variants": [
-      {
-        "size": "M",
-        "color": "White",
-        "quantity": 8,
-        "status": "in_stock",
-        "sku": "9763139191074-M-WHI"
-      },
-      {
-        "size": "S",
-        "color": "White",
-        "quantity": 1,
-        "status": "low_stock",
-        "sku": "9763139191074-S-WHI"
       }
     ],
     "last_restocked": "2025-12-15T10:00:00+08:00",

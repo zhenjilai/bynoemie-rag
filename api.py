@@ -1,542 +1,442 @@
 """
-ByNoemie RAG Chatbot - FastAPI Production API
-
-Endpoints:
-- POST /chat - Send message and get response
-- POST /search - Search products
-- GET /products - List all products
-- GET /product/{id} - Get product details
-- GET /health - Health check
-
-Usage:
-    uvicorn api:app --host 0.0.0.0 --port 8000
+ByNoemie RAG Chatbot - FastAPI Backend
 """
-
 import os
 import json
-import logging
-from typing import List, Dict, Optional, Any
-from datetime import datetime
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, HTTPException, Query, Depends
+from typing import Dict, List, Optional
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-import uvicorn
+from pydantic import BaseModel
+from pathlib import Path
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Import agents
+from src.agents import ChatbotOrchestrator
+from src.orders import OrderManager
 
-# =============================================================================
-# PYDANTIC MODELS
-# =============================================================================
+# Initialize FastAPI
+app = FastAPI(title="ByNoemie Fashion Assistant", version="2.0")
 
-class ChatMessage(BaseModel):
-    role: str = Field(..., description="Role: 'user' or 'assistant'")
-    content: str = Field(..., description="Message content")
-
-class ChatRequest(BaseModel):
-    message: str = Field(..., description="User message", min_length=1)
-    session_id: Optional[str] = Field(None, description="Session ID for conversation history")
-    history: Optional[List[ChatMessage]] = Field(default=[], description="Previous messages")
-
-class ChatResponse(BaseModel):
-    response: str = Field(..., description="Assistant response")
-    intent: str = Field(..., description="Detected intent")
-    products: List[Dict] = Field(default=[], description="Recommended products")
-    session_id: str = Field(..., description="Session ID")
-
-class SearchRequest(BaseModel):
-    query: str = Field(..., description="Search query", min_length=1)
-    limit: int = Field(default=10, ge=1, le=50, description="Max results")
-    category: Optional[str] = Field(None, description="Filter by category")
-    occasion: Optional[str] = Field(None, description="Filter by occasion")
-
-class ProductResponse(BaseModel):
-    product_id: str
-    product_name: str
-    product_type: str
-    price: float
-    currency: str
-    colors: str
-    category: Optional[str] = None
-    subcategory: Optional[str] = None
-    vibe_tags: List[str] = []
-    image_url: Optional[str] = None
-    product_url: Optional[str] = None
-
-class HealthResponse(BaseModel):
-    status: str
-    timestamp: str
-    version: str
-    products_loaded: int
-
-class FeedbackRequest(BaseModel):
-    session_id: str
-    message_id: str
-    rating: str = Field(..., description="'positive', 'negative', or 'neutral'")
-    comment: Optional[str] = None
-
-# =============================================================================
-# DATA LOADING
-# =============================================================================
-
-# Global data stores
-products_data: List[Dict] = []
-stock_data: Dict = {}
-policies_data: List[Dict] = []
-sessions: Dict[str, List[Dict]] = {}
-
-def load_data():
-    """Load all data files"""
-    global products_data, stock_data, policies_data
-    
-    # Load products
-    product_paths = ["data/products/bynoemie_products.json", "data/products/output.json"]
-    for path in product_paths:
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                products_data = json.load(f)
-                logger.info(f"Loaded {len(products_data)} products from {path}")
-                break
-    
-    # Load stock
-    stock_path = "data/stock/stock_inventory.json"
-    if os.path.exists(stock_path):
-        with open(stock_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                stock_data = {str(item['product_id']): item for item in data}
-            else:
-                stock_data = data
-            logger.info(f"Loaded stock data for {len(stock_data)} products")
-    
-    # Load policies
-    policy_path = "data/policies/policies.json"
-    if os.path.exists(policy_path):
-        with open(policy_path, 'r', encoding='utf-8') as f:
-            policies_data = json.load(f)
-            logger.info(f"Loaded {len(policies_data)} policies")
-
-# =============================================================================
-# CORE LOGIC (imported from app.py logic)
-# =============================================================================
-
-def get_openai_client():
-    """Get OpenAI client"""
-    try:
-        from openai import OpenAI
-        api_key = os.getenv("OPENAI_API_KEY")
-        if api_key:
-            return OpenAI(api_key=api_key)
-    except Exception as e:
-        logger.warning(f"OpenAI client not available: {e}")
-    return None
-
-def classify_intent(query: str, history: List[Dict] = None) -> Dict:
-    """Classify user intent"""
-    client = get_openai_client()
-    q = query.lower().strip()
-    
-    # Keywords for basic classification
-    if any(g in q for g in ['bye', 'goodbye', 'end']):
-        return {"intent": "END_CONVERSATION"}
-    if any(g in q for g in ['hello', 'hi', 'hey']):
-        return {"intent": "GREETING"}
-    if any(p in q for p in ['return', 'refund', 'shipping', 'policy', 'delivery']):
-        return {"intent": "POLICY_QUESTION"}
-    if any(s in q for s in ['in stock', 'available', 'size']):
-        return {"intent": "STOCK_CHECK"}
-    if any(cat in q for cat in ['shoes', 'heels', 'bags', 'dresses', 'dress', 'jumpsuit', 'tops']):
-        return {"intent": "RECOMMENDATION"}
-    if any(r in q for r in ['recommend', 'suggest', 'show me', 'looking for']):
-        return {"intent": "RECOMMENDATION"}
-    if any(p in q for p in ['how much', 'price', 'cost']):
-        return {"intent": "PRICE_CHECK"}
-    if any(t in q for t in ['thank', 'thanks']):
-        return {"intent": "THANKS"}
-    
-    # Use LLM for better classification if available
-    if client:
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "Classify intent: GREETING, RECOMMENDATION, STOCK_CHECK, PRODUCT_INFO, PRICE_CHECK, POLICY_QUESTION, THANKS, OFF_TOPIC, GENERAL. Return JSON: {\"intent\": \"...\"}"},
-                    {"role": "user", "content": query}
-                ],
-                max_tokens=50,
-                temperature=0.1
-            )
-            import re
-            result = response.choices[0].message.content
-            match = re.search(r'\{.*\}', result, re.DOTALL)
-            if match:
-                return json.loads(match.group())
-        except Exception as e:
-            logger.warning(f"LLM classification failed: {e}")
-    
-    return {"intent": "GENERAL"}
-
-def search_products_api(
-    query: str, 
-    limit: int = 10, 
-    category: str = None,
-    occasion: str = None
-) -> List[Dict]:
-    """Search products with filters"""
-    q = query.lower()
-    results = []
-    
-    # Category mapping
-    CATEGORY_MAP = {
-        "shoes": "Footwear", "heels": "Footwear", "footwear": "Footwear",
-        "bags": "Accessories", "bag": "Accessories", "clutch": "Accessories",
-        "dresses": "Clothing", "dress": "Clothing", "jumpsuit": "Clothing",
-        "tops": "Clothing", "top": "Clothing", "sets": "Clothing"
-    }
-    
-    # Detect category from query
-    target_category = category
-    if not target_category:
-        for kw, cat in CATEGORY_MAP.items():
-            if kw in q:
-                target_category = cat
-                break
-    
-    for p in products_data:
-        score = 0
-        
-        # Category filter
-        if target_category:
-            p_cat = p.get('category', '')
-            p_type = p.get('product_type', '').lower()
-            
-            if p_cat == target_category:
-                score += 50
-            elif target_category == "Footwear" and any(ft in p_type for ft in ['heel', 'sandal', 'pump']):
-                score += 50
-            elif target_category == "Accessories" and any(acc in p_type for acc in ['bag', 'clutch', 'tote']):
-                score += 50
-            elif target_category == "Clothing" and any(cl in p_type for cl in ['dress', 'jumpsuit', 'top', 'set']):
-                score += 50
-            else:
-                continue  # Skip non-matching category
-        
-        # Text matching
-        name = p.get('product_name', '').lower()
-        vibes = ' '.join(p.get('vibe_tags', [])).lower()
-        occasions = ' '.join(p.get('occasions', [])).lower()
-        
-        for word in q.split():
-            if word in name: score += 20
-            if word in vibes: score += 10
-            if word in occasions: score += 10
-        
-        # Occasion filter
-        if occasion and occasion.lower() in occasions:
-            score += 30
-        
-        if score > 0:
-            results.append((p, score))
-    
-    results.sort(key=lambda x: x[1], reverse=True)
-    return [p[0] for p in results[:limit]]
-
-def generate_response(query: str, intent: str, products: List[Dict] = None) -> str:
-    """Generate response based on intent"""
-    client = get_openai_client()
-    
-    if intent == "GREETING":
-        return "Hello! 👋 Welcome to ByNoemie. I'm here to help you find the perfect outfit. What are you looking for today?"
-    
-    if intent == "THANKS":
-        return "You're welcome! 💕 Let me know if you need anything else."
-    
-    if intent == "END_CONVERSATION":
-        return "Thank you for visiting ByNoemie! Have a wonderful day! 💫"
-    
-    if intent == "OFF_TOPIC":
-        return "I'm your fashion assistant, so I specialize in style advice! 👗 Can I help you find something fabulous to wear?"
-    
-    if intent == "RECOMMENDATION" and products:
-        names = [p.get('product_name', '') for p in products[:3]]
-        if client:
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": "Fashion stylist. Give SHORT recommendation (2 sentences). Mention specific product names."},
-                        {"role": "user", "content": f"Query: {query}\nProducts: {', '.join(names)}"}
-                    ],
-                    max_tokens=150,
-                    temperature=0.7
-                )
-                return response.choices[0].message.content
-            except:
-                pass
-        return f"I found some great options for you! Check out the {names[0]} - it's absolutely stunning! ✨"
-    
-    if intent == "POLICY_QUESTION":
-        # Search policies
-        for policy in policies_data:
-            if any(kw in query.lower() for kw in policy.get('keywords', [])):
-                return policy.get('answer', "Please contact us for policy details.")
-        return "For detailed policy information, please visit our website or contact customer service."
-    
-    return "I'd be happy to help! Could you tell me more about what you're looking for?"
-
-# =============================================================================
-# FASTAPI APP
-# =============================================================================
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup and shutdown events"""
-    # Startup
-    logger.info("Starting ByNoemie API...")
-    load_data()
-    yield
-    # Shutdown
-    logger.info("Shutting down ByNoemie API...")
-
-app = FastAPI(
-    title="ByNoemie Fashion Assistant API",
-    description="AI-powered fashion chatbot and product search API",
-    version="1.0.0",
-    lifespan=lifespan
-)
-
-# CORS middleware
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # =============================================================================
+# DATA LOADING
+# =============================================================================
+def load_products():
+    products_path = Path("data/products/bynoemie_products.json")
+    if products_path.exists():
+        with open(products_path, 'r') as f:
+            return json.load(f)
+    return []
+
+def load_stock():
+    """Load stock data - convert list to dict keyed by product_name"""
+    stock_path = Path("data/stock/stock_inventory.json")
+    if stock_path.exists():
+        with open(stock_path, 'r') as f:
+            stock_list = json.load(f)
+            # Convert list to dict keyed by product_name (lowercase)
+            if isinstance(stock_list, list):
+                return {item['product_name'].lower(): item for item in stock_list}
+            return stock_list
+    return {}
+
+def reload_stock():
+    """Reload stock data from disk - call after order changes"""
+    global stock_data
+    stock_data = load_stock()
+    # Also update agents' stock_data if orchestrator exists
+    if orchestrator:
+        orchestrator.info_agent.stock_data = stock_data
+        orchestrator.action_agent.stock_data = stock_data
+        print(f"🔄 Stock reloaded: {len(stock_data)} entries")
+    return stock_data
+
+def load_images():
+    """Load image URLs - images are already in products data, build lookup by handle"""
+    products_path = Path("data/products/bynoemie_products.json")
+    if products_path.exists():
+        with open(products_path, 'r') as f:
+            products = json.load(f)
+            # Build image lookup by product_handle
+            images = {}
+            for p in products:
+                handle = p.get('product_handle', '')
+                if handle:
+                    images[handle] = {
+                        'image_1': p.get('image_url_1', ''),
+                        'image_2': p.get('image_url_2', ''),
+                        'image_3': p.get('image_url_3', '')
+                    }
+            return images
+    return {}
+
+products = load_products()
+stock_data = load_stock()
+images_data = load_images()
+
+# Debug: Print what we loaded
+print(f"📦 Loaded {len(products)} products")
+print(f"📊 Loaded {len(stock_data)} stock entries")
+print(f"🖼️ Loaded {len(images_data)} image entries")
+
+# Debug: Check if Coco Dress is in stock_data
+if 'coco dress' in stock_data:
+    print(f"✅ Coco Dress stock found: {stock_data['coco dress'].get('total_inventory')} units")
+else:
+    print(f"❌ Coco Dress NOT found in stock_data. Keys: {list(stock_data.keys())[:5]}")
+
+# =============================================================================
+# ORCHESTRATOR
+# =============================================================================
+orchestrator = None
+
+def init_orchestrator():
+    global orchestrator
+    try:
+        from openai import OpenAI
+        
+        # Try to load .env file
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            print("⚠️ python-dotenv not installed, using system environment")
+        
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            print("❌ OPENAI_API_KEY not found!")
+            print("   Set it in .env file or as environment variable")
+            return
+        
+        openai_client = OpenAI(api_key=api_key)
+        order_manager = OrderManager()
+        
+        class SimpleUserManager:
+            def get_user(self, user_id):
+                return {"user_id": user_id, "name": "Customer"}
+        
+        class SimplePolicyRAG:
+            def query(self, q):
+                return "Standard return policy: 14 days for unworn items."
+        
+        orchestrator = ChatbotOrchestrator(
+            openai_client=openai_client,
+            products=products,
+            stock_data=stock_data,
+            order_manager=order_manager,
+            user_manager=SimpleUserManager(),
+            policy_rag=SimplePolicyRAG()
+        )
+        print("✅ Orchestrator initialized")
+    except Exception as e:
+        print(f"❌ Orchestrator error: {e}")
+
+@app.on_event("startup")
+async def startup():
+    init_orchestrator()
+
+# =============================================================================
+# MODELS
+# =============================================================================
+class ChatRequest(BaseModel):
+    message: str
+    conversation_history: List[Dict] = []
+    user_id: str = "USR-001"
+
+class ChatResponse(BaseModel):
+    message: str
+    products: List[Dict] = []
+
+# =============================================================================
 # ENDPOINTS
 # =============================================================================
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    index_path = Path("static/index.html")
+    if index_path.exists():
+        return FileResponse("static/index.html")
+    else:
+        # Return inline HTML if file not found
+        return HTMLResponse(content=get_inline_html(), status_code=200)
 
-@app.get("/health", response_model=HealthResponse, tags=["System"])
-async def health_check():
-    """Health check endpoint"""
-    return HealthResponse(
-        status="healthy",
-        timestamp=datetime.now().isoformat(),
-        version="1.0.0",
-        products_loaded=len(products_data)
-    )
+def get_inline_html():
+    """Return the full HTML inline as fallback"""
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ByNoemie Fashion Assistant</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Montserrat', sans-serif; background: #0D0F12; color: #FFFFFF; min-height: 100vh; display: flex; flex-direction: column; }
+        .header { text-align: center; padding: 30px 20px; background: linear-gradient(180deg, #1a1d24 0%, #0D0F12 100%); }
+        .logo { font-family: 'Cormorant Garamond', serif; font-size: 2.5em; font-weight: 600; color: #D4A574; }
+        .tagline { color: #888; font-size: 0.95em; margin-top: 5px; }
+        .chat-container { flex: 1; max-width: 1200px; margin: 0 auto; width: 100%; padding: 20px; display: flex; flex-direction: column; }
+        .messages { flex: 1; overflow-y: auto; padding-bottom: 20px; }
+        .message { display: flex; margin-bottom: 20px; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .message.user { justify-content: flex-end; }
+        .message-content { max-width: 80%; padding: 14px 18px; border-radius: 16px; line-height: 1.5; }
+        .message.user .message-content { background: #D4A574; color: #0D0F12; border-bottom-right-radius: 4px; }
+        .message.assistant .message-content { background: #1C1F26; color: #F5F5F5; border-bottom-left-radius: 4px; }
+        .avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+        .message.user .avatar { margin-left: 12px; background: #2A2F3A; order: 2; }
+        .message.assistant .avatar { margin-right: 12px; background: #D4A574; }
+        .product-carousel { display: flex; overflow-x: auto; gap: 16px; padding: 16px 4px; height: 380px; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+        .product-carousel::-webkit-scrollbar { display: none; }
+        .product-card { width: 200px; height: 340px; background: #1C1F26; border-radius: 14px; padding: 12px; display: flex; flex-direction: column; cursor: pointer; transition: all 0.3s ease; flex-shrink: 0; text-decoration: none; color: inherit; }
+        .product-card:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
+        .product-image-wrapper { width: 176px; height: 220px; overflow: hidden; border-radius: 10px; margin-bottom: 10px; background: #2A2F3A; }
+        .product-image { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s ease; }
+        .product-card:hover .product-image { transform: scale(1.03); }
+        .product-name { font-size: 13px; font-weight: 600; color: #FFFFFF; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .product-price { font-size: 12px; font-weight: 500; color: #B0F2C2; margin-bottom: 4px; }
+        .product-category { font-size: 10px; color: #9AA0A6; margin-bottom: 6px; }
+        .product-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; }
+        .pill { display: inline-block; height: 18px; line-height: 18px; padding: 0 8px; border-radius: 9px; font-size: 10px; font-weight: 500; }
+        .pill.stock-in { background: #1E3A2F; color: #4ADE80; }
+        .pill.stock-low { background: #3A2A1E; color: #F2B04A; }
+        .pill.stock-out { background: #3A2A2A; color: #888; }
+        .pill.tag { background: #2A2F3A; color: #C7C7FF; }
+        .input-area { padding: 20px; background: #1C1F26; border-top: 1px solid #2A2F3A; }
+        .input-wrapper { max-width: 1200px; margin: 0 auto; display: flex; gap: 12px; }
+        .chat-input { flex: 1; background: #0D0F12; border: 1px solid #2A2F3A; border-radius: 12px; padding: 14px 18px; color: #FFFFFF; font-family: 'Montserrat', sans-serif; font-size: 14px; outline: none; transition: border-color 0.3s ease; }
+        .chat-input:focus { border-color: #D4A574; }
+        .chat-input::placeholder { color: #666; }
+        .send-btn { background: #D4A574; border: none; border-radius: 12px; padding: 14px 24px; color: #0D0F12; font-family: 'Montserrat', sans-serif; font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.3s ease; }
+        .send-btn:hover { background: #E8C59D; transform: translateY(-2px); }
+        .send-btn:disabled { background: #666; cursor: not-allowed; transform: none; }
+        .quick-actions { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; justify-content: center; }
+        .quick-btn { background: #1C1F26; border: 1px solid #2A2F3A; border-radius: 20px; padding: 8px 16px; color: #D4A574; font-size: 12px; cursor: pointer; transition: all 0.3s ease; }
+        .quick-btn:hover { background: #2A2F3A; border-color: #D4A574; }
+        .typing-indicator { display: flex; gap: 4px; padding: 10px; }
+        .typing-dot { width: 8px; height: 8px; background: #D4A574; border-radius: 50%; animation: typing 1.4s infinite ease-in-out; }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typing { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-8px); } }
+        .feedback-buttons { display: flex; gap: 8px; margin-top: 10px; }
+        .feedback-btn { background: transparent; border: 1px solid #2A2F3A; border-radius: 8px; padding: 6px 12px; cursor: pointer; transition: all 0.2s ease; font-size: 16px; }
+        .feedback-btn:hover { background: #2A2F3A; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1 class="logo">✨ ByNoemie ✨</h1>
+        <p class="tagline">Your Personal Fashion Assistant</p>
+    </header>
+    <div class="chat-container">
+        <div class="quick-actions">
+            <button class="quick-btn" onclick="sendMessage('What should I wear for a gala dinner?')">👗 Gala Dinner</button>
+            <button class="quick-btn" onclick="sendMessage('Show me dresses')">💃 Dresses</button>
+            <button class="quick-btn" onclick="sendMessage('Suggest outfit for date night')">💕 Date Night</button>
+            <button class="quick-btn" onclick="sendMessage('What bags do you have?')">👜 Bags</button>
+            <button class="quick-btn" onclick="sendMessage('Check my orders')">📦 My Orders</button>
+        </div>
+        <div class="messages" id="messages"></div>
+    </div>
+    <div class="input-area">
+        <div class="input-wrapper">
+            <input type="text" class="chat-input" id="chatInput" placeholder="How may I assist you?" onkeypress="handleKeyPress(event)">
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+    <script>
+        const messagesContainer = document.getElementById('messages');
+        const chatInput = document.getElementById('chatInput');
+        const sendBtn = document.getElementById('sendBtn');
+        let conversationHistory = [];
 
-@app.post("/chat", response_model=ChatResponse, tags=["Chat"])
+        function addMessage(content, role, products = []) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = role === 'user' ? '👤' : '🛍️';
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = content;
+            if (role === 'user') {
+                messageDiv.appendChild(contentDiv);
+                messageDiv.appendChild(avatar);
+            } else {
+                messageDiv.appendChild(avatar);
+                messageDiv.appendChild(contentDiv);
+                const feedbackDiv = document.createElement('div');
+                feedbackDiv.className = 'feedback-buttons';
+                feedbackDiv.innerHTML = '<button class="feedback-btn" onclick="sendFeedback(\'positive\')">👍</button><button class="feedback-btn" onclick="sendFeedback(\'negative\')">👎</button><button class="feedback-btn" onclick="sendFeedback(\'neutral\')">😐</button>';
+                contentDiv.appendChild(feedbackDiv);
+            }
+            messagesContainer.appendChild(messageDiv);
+            if (products && products.length > 0) {
+                const carouselDiv = createProductCarousel(products);
+                messagesContainer.appendChild(carouselDiv);
+            }
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function createProductCarousel(products) {
+            const carouselDiv = document.createElement('div');
+            carouselDiv.className = 'product-carousel';
+            products.forEach(product => {
+                const card = document.createElement('a');
+                card.className = 'product-card';
+                card.href = product.product_url;
+                card.target = '_blank';
+                let stockPill = '';
+                if (product.stock_status === 'In Stock') {
+                    if (product.total_inventory > 0 && product.total_inventory <= 5) {
+                        stockPill = `<span class="pill stock-low">Only ${product.total_inventory} left</span>`;
+                    } else {
+                        stockPill = '<span class="pill stock-in">In Stock</span>';
+                    }
+                } else {
+                    stockPill = '<span class="pill stock-out">Out of Stock</span>';
+                }
+                const tagPills = (product.tags || []).map(tag => `<span class="pill tag">${tag}</span>`).join('');
+                card.innerHTML = `
+                    <div class="product-image-wrapper">
+                        <img src="${product.image_url}" alt="${product.product_name}" class="product-image" onerror="this.style.display='none'">
+                    </div>
+                    <div class="product-name">${product.product_name}</div>
+                    <div class="product-price">MYR ${product.price}</div>
+                    ${product.category ? `<div class="product-category">${product.category}</div>` : ''}
+                    <div class="product-pills">${stockPill}${tagPills}</div>
+                `;
+                carouselDiv.appendChild(card);
+            });
+            return carouselDiv;
+        }
+
+        function showTypingIndicator() {
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'message assistant';
+            typingDiv.id = 'typing-indicator';
+            typingDiv.innerHTML = '<div class="avatar">🛍️</div><div class="message-content"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div>';
+            messagesContainer.appendChild(typingDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function hideTypingIndicator() {
+            const indicator = document.getElementById('typing-indicator');
+            if (indicator) indicator.remove();
+        }
+
+        async function sendMessage(customMessage = null) {
+            const message = customMessage || chatInput.value.trim();
+            if (!message) return;
+            chatInput.value = '';
+            addMessage(message, 'user');
+            conversationHistory.push({ role: 'user', content: message });
+            sendBtn.disabled = true;
+            chatInput.disabled = true;
+            showTypingIndicator();
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: message, conversation_history: conversationHistory })
+                });
+                if (!response.ok) throw new Error('Network error');
+                const data = await response.json();
+                hideTypingIndicator();
+                addMessage(data.message, 'assistant', data.products);
+                conversationHistory.push({ role: 'assistant', content: data.message });
+            } catch (error) {
+                hideTypingIndicator();
+                addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
+                console.error('Error:', error);
+            } finally {
+                sendBtn.disabled = false;
+                chatInput.disabled = false;
+                chatInput.focus();
+            }
+        }
+
+        function handleKeyPress(event) { if (event.key === 'Enter') sendMessage(); }
+        function sendFeedback(type) { console.log('Feedback:', type); }
+        document.addEventListener('DOMContentLoaded', () => {
+            addMessage("Hello! I'm your ByNoemie fashion assistant. How can I help you today? 👗✨", 'assistant');
+        });
+    </script>
+</body>
+</html>'''
+
+@app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """
-    Send a message to the chatbot and get a response.
+    if not orchestrator:
+        raise HTTPException(status_code=500, detail="Chatbot not initialized")
     
-    - Supports conversation history via session_id
-    - Returns detected intent and relevant products
-    """
-    import uuid
+    try:
+        orchestrator.set_user(request.user_id)
+        
+        response = orchestrator.process(
+            request.message,
+            chat_history=request.conversation_history
+        )
+        
+        # Reload stock if an order action was completed (create/cancel/modify)
+        if response.action_completed:
+            reload_stock()
+        
+        formatted_products = []
+        if response.products_to_show:
+            for p in response.products_to_show:
+                handle = p.get('product_handle', '')
+                image_url = images_data.get(handle, {}).get('image_1', '') or p.get('image_url_1', '')
+                tags = p.get('vibe_tags', []) or p.get('style_attributes', [])
+                if isinstance(tags, str):
+                    tags = [t.strip() for t in tags.split(',')]
+                
+                # Get updated stock info
+                product_name_lower = p.get('product_name', '').lower()
+                updated_stock = stock_data.get(product_name_lower, {})
+                total_inv = updated_stock.get('total_inventory', p.get('total_inventory', 0))
+                
+                formatted_products.append({
+                    "product_name": p.get('product_name', 'Product'),
+                    "product_handle": handle,
+                    "price": p.get('price_min', 0),
+                    "stock_status": 'In Stock' if total_inv > 0 else 'Out of Stock',
+                    "total_inventory": total_inv,
+                    "category": p.get('subcategory', '') or p.get('product_type', ''),
+                    "tags": tags[:2] if tags else [],
+                    "image_url": image_url,
+                    "product_url": p.get('product_link', f"https://bynoemie.com.my/products/{handle}")
+                })
+        
+        return ChatResponse(message=response.message, products=formatted_products)
     
-    # Get or create session
-    session_id = request.session_id or str(uuid.uuid4())
-    if session_id not in sessions:
-        sessions[session_id] = []
-    
-    # Add user message to history
-    sessions[session_id].append({"role": "user", "content": request.message})
-    
-    # Classify intent
-    intent_result = classify_intent(request.message, sessions[session_id])
-    intent = intent_result.get("intent", "GENERAL")
-    
-    # Search products if recommendation
-    products = []
-    if intent in ["RECOMMENDATION", "PRODUCT_INFO", "STOCK_CHECK"]:
-        products = search_products_api(request.message, limit=10)
-    
-    # Generate response
-    response_text = generate_response(request.message, intent, products)
-    
-    # Add assistant response to history
-    sessions[session_id].append({"role": "assistant", "content": response_text})
-    
-    # Limit history size
-    if len(sessions[session_id]) > 20:
-        sessions[session_id] = sessions[session_id][-20:]
-    
-    # Format products for response
-    formatted_products = []
-    for p in products[:10]:
-        formatted_products.append({
-            "product_id": str(p.get("product_id", "")),
-            "product_name": p.get("product_name", ""),
-            "product_type": p.get("product_type", ""),
-            "price": p.get("price_min", 0),
-            "currency": p.get("price_currency", "MYR"),
-            "colors": p.get("colors_available", ""),
-            "category": p.get("category", ""),
-            "subcategory": p.get("subcategory", ""),
-            "vibe_tags": p.get("vibe_tags", []),
-            "image_url": p.get("image_url_1", ""),
-            "product_url": p.get("product_link", "")
-        })
-    
-    return ChatResponse(
-        response=response_text,
-        intent=intent,
-        products=formatted_products,
-        session_id=session_id
-    )
+    except Exception as e:
+        print(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/search", tags=["Products"])
-async def search_products(request: SearchRequest):
-    """
-    Search products by query with optional filters.
-    
-    - Supports category filtering (Clothing, Footwear, Accessories)
-    - Supports occasion filtering (party, wedding, casual, etc.)
-    """
-    products = search_products_api(
-        query=request.query,
-        limit=request.limit,
-        category=request.category,
-        occasion=request.occasion
-    )
-    
-    return {
-        "query": request.query,
-        "count": len(products),
-        "products": [
-            {
-                "product_id": str(p.get("product_id", "")),
-                "product_name": p.get("product_name", ""),
-                "product_type": p.get("product_type", ""),
-                "price": p.get("price_min", 0),
-                "currency": p.get("price_currency", "MYR"),
-                "colors": p.get("colors_available", ""),
-                "category": p.get("category", ""),
-                "vibe_tags": p.get("vibe_tags", [])[:5],
-                "image_url": p.get("image_url_1", "")
-            }
-            for p in products
-        ]
-    }
+@app.get("/api/health")
+async def health():
+    return {"status": "healthy", "orchestrator": orchestrator is not None, "products": len(products)}
 
-@app.get("/products", tags=["Products"])
-async def list_products(
-    category: Optional[str] = Query(None, description="Filter by category"),
-    limit: int = Query(50, ge=1, le=100, description="Max results")
-):
-    """List all products with optional category filter"""
-    results = products_data
-    
-    if category:
-        results = [p for p in results if p.get("category", "").lower() == category.lower()]
-    
-    return {
-        "count": len(results[:limit]),
-        "products": [
-            {
-                "product_id": str(p.get("product_id", "")),
-                "product_name": p.get("product_name", ""),
-                "product_type": p.get("product_type", ""),
-                "price": p.get("price_min", 0),
-                "category": p.get("category", ""),
-                "image_url": p.get("image_url_1", "")
-            }
-            for p in results[:limit]
-        ]
-    }
+# Static files - create folder if needed
+static_dir = Path("static")
+static_dir.mkdir(exist_ok=True)
 
-@app.get("/products/{product_id}", tags=["Products"])
-async def get_product(product_id: str):
-    """Get product details by ID"""
-    for p in products_data:
-        if str(p.get("product_id", "")) == product_id:
-            # Get stock info
-            stock_info = stock_data.get(product_id, {})
-            
-            return {
-                "product_id": product_id,
-                "product_name": p.get("product_name", ""),
-                "product_type": p.get("product_type", ""),
-                "description": p.get("product_description", ""),
-                "price": p.get("price_min", 0),
-                "currency": p.get("price_currency", "MYR"),
-                "colors": p.get("colors_available", ""),
-                "sizes": p.get("size_options", ""),
-                "material": p.get("material", ""),
-                "category": p.get("category", ""),
-                "subcategory": p.get("subcategory", ""),
-                "vibe_tags": p.get("vibe_tags", []),
-                "occasions": p.get("occasions", []),
-                "style_attributes": p.get("style_attributes", []),
-                "mood_summary": p.get("mood_summary", ""),
-                "ideal_for": p.get("ideal_for", ""),
-                "image_url": p.get("image_url_1", ""),
-                "product_url": p.get("product_link", ""),
-                "in_stock": stock_info.get("in_stock", True),
-                "variants": stock_info.get("variants", [])
-            }
-    
-    raise HTTPException(status_code=404, detail="Product not found")
+# Check if index.html exists
+index_path = static_dir / "index.html"
+if not index_path.exists():
+    print("⚠️ static/index.html not found! Creating placeholder...")
 
-@app.post("/feedback", tags=["Feedback"])
-async def submit_feedback(request: FeedbackRequest):
-    """Submit feedback for a chat response"""
-    feedback_path = "data/feedback/api_feedback.json"
-    
-    # Load existing feedback
-    feedback_data = []
-    if os.path.exists(feedback_path):
-        with open(feedback_path, 'r') as f:
-            feedback_data = json.load(f)
-    
-    # Add new feedback
-    feedback_data.append({
-        "session_id": request.session_id,
-        "message_id": request.message_id,
-        "rating": request.rating,
-        "comment": request.comment,
-        "timestamp": datetime.now().isoformat()
-    })
-    
-    # Save
-    os.makedirs(os.path.dirname(feedback_path), exist_ok=True)
-    with open(feedback_path, 'w') as f:
-        json.dump(feedback_data, f, indent=2)
-    
-    return {"status": "success", "message": "Feedback recorded"}
-
-@app.get("/categories", tags=["Products"])
-async def get_categories():
-    """Get all product categories with counts"""
-    categories = {}
-    for p in products_data:
-        cat = p.get("category", "Uncategorized")
-        categories[cat] = categories.get(cat, 0) + 1
-    
-    return {
-        "categories": [
-            {"name": name, "count": count}
-            for name, count in sorted(categories.items())
-        ]
-    }
-
-# =============================================================================
-# RUN
-# =============================================================================
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(
-        "api:app",
-        host="0.0.0.0",
-        port=port,
-        reload=os.getenv("ENV", "production") == "development"
-    )
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8501)

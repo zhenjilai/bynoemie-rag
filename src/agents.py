@@ -13,6 +13,7 @@ All agents share conversation history and state.
 
 import json
 import re
+import random
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
@@ -134,26 +135,47 @@ class RouterAgent:
         q = query.strip()
         q_lower = q.lower()
         
-        # 1. Check for EXACT confirmation keywords first
+        # 1. Check for EXACT confirmation keywords first (single word only!)
         if q.upper() in ["ORDER", "DELETE", "CHANGE"]:
             return AgentType.CONFIRMATION, {"confirm_type": q.upper()}
         
-        # 2. Fashion keyword safety check - NEVER deflect fashion queries
+        # 2. ORDER ACTION KEYWORDS - Route cancel/remove/modify requests to ACTION
+        # These are REQUESTS to perform an action, not confirmations
+        action_phrases = [
+            'cancel my order', 'cancel order', 'cancel the order',
+            'remove my order', 'remove order', 'remove the order',
+            'delete my order', 'delete order', 'delete the order',
+            'modify my order', 'modify order', 'modify the order',
+            'change my order', 'change order', 'change the order',
+            'i want to cancel', 'i want to remove', 'i want to delete',
+            'i want to modify', 'i want to change',
+            'i want to order', 'i would like to order', 'can i order',
+            'place an order', 'make an order', 'buy the', 'purchase the'
+        ]
+        if any(phrase in q_lower for phrase in action_phrases):
+            # Extract product name if mentioned
+            product_mentioned = None
+            for pname in self.product_names:
+                if pname.lower() in q_lower:
+                    product_mentioned = pname
+                    break
+            return AgentType.ACTION, {"product_mentioned": product_mentioned, "reason": "Order action request"}
+        
+        # 3. Fashion keyword safety check - NEVER deflect fashion queries
         fashion_keywords = [
             'dress', 'dresses', 'jumpsuit', 'jumpsuits', 'heel', 'heels', 'shoe', 'shoes',
             'bag', 'bags', 'top', 'tops', 'set', 'sets', 'outfit', 'outfits',
             'wear', 'wearing', 'style', 'styling', 'fashion', 'clothes', 'clothing',
             'gala', 'wedding', 'dinner', 'party', 'date', 'occasion', 'formal', 'casual',
             'recommend', 'suggestion', 'show me', 'looking for', 'browse',
-            'stock', 'available', 'size', 'color', 'colour', 'price', 'cost',
-            'order', 'buy', 'purchase', 'track', 'cancel', 'modify'
+            'stock', 'available', 'size', 'color', 'colour', 'price', 'cost'
         ]
         is_fashion_query = any(kw in q_lower for kw in fashion_keywords)
         
         # Check if it's a product name
         is_product_query = any(pname.lower() in q_lower for pname in self.product_names)
         
-        # 3. Use LLM for intelligent routing
+        # 4. Use LLM for intelligent routing
         if self.client:
             result = self._llm_route(query, state)
             if result:
@@ -161,9 +183,12 @@ class RouterAgent:
                 # Safety: If LLM says DEFLECTION but query has fashion keywords, override to INFO
                 if agent_type == AgentType.DEFLECTION and (is_fashion_query or is_product_query):
                     return AgentType.INFO, extracted
+                # Safety: If LLM says CONFIRMATION but query is more than one word, it's likely ACTION
+                if agent_type == AgentType.CONFIRMATION and len(q.split()) > 1:
+                    return AgentType.ACTION, extracted
                 return result
         
-        # 4. Fallback to keyword-based routing
+        # 5. Fallback to keyword-based routing
         return self._keyword_route(q_lower, state)
     
     def _llm_route(self, query: str, state: SharedState) -> Optional[Tuple[AgentType, Dict]]:
@@ -177,47 +202,52 @@ class RouterAgent:
         
         pending_str = f"Pending: {pending_action['type']} for {pending_action.get('data', {}).get('product_name', 'unknown')}" if pending_action else "None"
         
-        system_prompt = f"""You are a router for a fashion boutique chatbot. Analyze the query and decide which agent should handle it.
+        system_prompt = f"""You are a router for a fashion boutique chatbot.
 
-CURRENT CONTEXT:
+═══════════════════════════════════════════════════════════
+CONTEXT:
+═══════════════════════════════════════════════════════════
 - Current Product: {current_product}
 - Pending Action: {pending_str}
-- Recent Products Discussed: {', '.join([p.get('product_name', '') for p in state.last_shown_products[-3:]]) or 'None'}
-- Occasions Mentioned in Conversation: {', '.join(context['mentioned_occasions']) or 'None'}
-- Categories Mentioned in Conversation: {', '.join(context['mentioned_categories']) or 'None'}
+- Recent Products: {', '.join([p.get('product_name', '') for p in state.last_shown_products[-3:]]) or 'None'}
 
-AGENTS:
-1. DEFLECTION - ONLY for truly off-topic questions (weather, math, cooking, general knowledge NOT related to fashion)
-2. INFO - For ALL fashion-related queries: product info, recommendations, stock, prices, styling advice, outfit suggestions, what to wear questions
-3. ACTION - For creating orders, modifying orders, canceling orders, updating profile
-4. CONFIRMATION - ONLY when user types exactly "ORDER", "DELETE", or "CHANGE"
+═══════════════════════════════════════════════════════════
+AGENTS - READ CAREFULLY:
+═══════════════════════════════════════════════════════════
+1. DEFLECTION - ONLY for truly off-topic (weather, math, cooking)
 
-CRITICAL RULES:
-1. ANY question about what to wear, outfit advice, styling, fashion recommendations → INFO (NOT DEFLECTION!)
-2. Category words alone (dress, dresses, heels, bags, jumpsuit) → INFO (show products)
-3. Occasion-based queries (gala, wedding, dinner, party, date) + fashion context → INFO
-4. If user refers to "this", "it", "the dress" without naming a product → Use current product context
-5. If user previously mentioned an occasion (like "gala dinner"), remember it for follow-up queries
-6. "other colors for this?" → INFO
-7. "i want to order..." / "buy..." / "purchase..." → ACTION
-8. "cancel order" / "modify order" / "change order" → ACTION
-9. "track order" / "order status" / "where is my order" → INFO
-10. Questions about weather, food, math, history, science (NOT fashion) → DEFLECTION
+2. INFO - Fashion queries: product info, colors, sizes, stock, recommendations
 
-IMPORTANT: If "Occasions Mentioned in Conversation" shows something like "gala, dinner" - this context applies to follow-up queries!
+3. ACTION - User REQUESTS to do something:
+   • "i want to order..." → ACTION
+   • "cancel my order" → ACTION
+   • "remove my order" → ACTION  
+   • "delete my order" → ACTION
+   • "modify my order" → ACTION
+   • "change my order" → ACTION
+   
+4. CONFIRMATION - ONLY when message is EXACTLY one word:
+   • "ORDER" (exactly) → CONFIRMATION
+   • "DELETE" (exactly) → CONFIRMATION
+   • "CHANGE" (exactly) → CONFIRMATION
+   • NOT "i want to order" (that's ACTION!)
+   • NOT "cancel my order" (that's ACTION!)
 
-EXAMPLES:
-- "what to wear for gala dinner" → INFO (fashion advice!)
-- "dress" (after user asked about gala) → INFO (show dresses FOR GALA context)
-- "dress for gala dinner" → INFO (recommendation)
-- "what's the weather" → DEFLECTION
-- "ella dress" → INFO (product info)
-- "i want to order the luna dress" → ACTION
+═══════════════════════════════════════════════════════════
+CRITICAL DISTINCTION:
+═══════════════════════════════════════════════════════════
+• "i want to cancel my order for tiara dress" → ACTION (user is REQUESTING cancellation)
+• "DELETE" → CONFIRMATION (user is CONFIRMING a pending action)
 
-AVAILABLE PRODUCTS: {', '.join(self.product_names[:15])}
+• "remove my order" → ACTION
+• "ORDER" → CONFIRMATION
 
-Return JSON only:
-{{"agent": "DEFLECTION/INFO/ACTION/CONFIRMATION", "product_mentioned": "product name or null", "size": "S/M/L/etc or null", "color": "color or null", "order_id": "ORD-XXX or null", "reason": "brief reason"}}"""
+═══════════════════════════════════════════════════════════
+PRODUCTS: {', '.join(self.product_names[:15])}
+═══════════════════════════════════════════════════════════
+
+Return JSON:
+{{"agent": "ACTION", "product_mentioned": "Product Name or null", "order_id": "ORD-XXX or null", "reason": "brief reason"}}"""""
 
         messages = [
             {"role": "system", "content": system_prompt}
@@ -424,7 +454,7 @@ class DeflectionAgent:
         if not matching:
             matching = self.products
         
-        matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:8]
+        matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:10]
         
         # Update state
         state.last_shown_products = matching
@@ -466,55 +496,158 @@ class InfoAgent:
         
         # Build product lookup
         self.product_lookup = {p['product_name'].lower(): p for p in products}
+        
+        # Debug: Print stock_data info
+        print(f"🔍 InfoAgent initialized with {len(stock_data)} stock entries")
+        if 'coco dress' in stock_data:
+            print(f"   ✅ 'coco dress' found in stock_data")
+        else:
+            print(f"   ❌ 'coco dress' NOT in stock_data. Keys: {list(stock_data.keys())[:3]}")
     
     def handle(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
-        q = query.lower()
+        """
+        IMPROVED ROUTING: Product-specific queries take PRIORITY over generic keywords.
         
-        # Determine sub-intent
+        Priority Order:
+        1. Order tracking/policy (no product needed)
+        2. Product mentioned + attribute question → PRODUCT INFO
+        3. Product mentioned alone → PRODUCT INFO  
+        4. Generic recommendations (occasion, category, etc.)
+        """
+        q = query.lower()
+        print(f"\n🔍 InfoAgent.handle()")
+        print(f"   Query: '{q}'")
+        print(f"   Extracted: {extracted}")
+        
+        # =====================================================================
+        # STEP 1: DETECT PRODUCT MENTION - Find BEST match (most words)
+        # =====================================================================
+        mentioned_product = None
+        best_match_score = 0
+        
+        # First check if router already extracted a product
+        if extracted.get('product_mentioned'):
+            mentioned_product = self._find_product(extracted['product_mentioned'])
+            if mentioned_product:
+                print(f"   ✓ Found from extracted: {mentioned_product['product_name']}")
+                best_match_score = 100  # High score for exact extraction
+        
+        # Search query for product names - find BEST match
+        if not mentioned_product or best_match_score < 100:
+            candidates = []
+            
+            for p in self.products:
+                pname = p['product_name'].lower()
+                pname_words = [w for w in pname.split() if len(w) > 2]
+                
+                # Exact full name match - highest priority
+                if pname in q:
+                    candidates.append((p, len(pname_words) * 10, "exact"))
+                    continue
+                
+                # Count matching words
+                matches = sum(1 for word in pname_words if word in q)
+                if matches >= 2:
+                    # Score based on match ratio
+                    score = (matches / len(pname_words)) * matches
+                    candidates.append((p, score, f"{matches}/{len(pname_words)} words"))
+            
+            # Sort by score descending, pick best
+            if candidates:
+                candidates.sort(key=lambda x: x[1], reverse=True)
+                best = candidates[0]
+                if best[1] > best_match_score:
+                    mentioned_product = best[0]
+                    print(f"   ✓ Best match ({best[2]}): {best[0]['product_name']}")
+        
+        # Check for context references (this, it, that)
+        if not mentioned_product and state.current_product:
+            context_refs = ['this', 'it', 'that', 'the dress', 'the item', 'same one', 'this one']
+            if any(ref in q for ref in context_refs):
+                mentioned_product = self._find_product(state.current_product)
+                if mentioned_product:
+                    print(f"   ✓ Context reference to: {mentioned_product['product_name']}")
+        
+        # =====================================================================
+        # STEP 2: NON-PRODUCT QUERIES (handle first if no product context needed)
+        # =====================================================================
+        
+        # Order tracking
         if any(w in q for w in ['track', 'where is my order', 'order status', 'check order', 'my order']):
+            print("   → _handle_order_tracking")
             return self._handle_order_tracking(query, state, extracted)
         
+        # Policy questions
         if any(w in q for w in ['return', 'refund', 'exchange', 'shipping', 'delivery', 'policy']):
+            print("   → _handle_policy")
             return self._handle_policy(query, state)
         
-        # Fashion advice / What to wear / Occasion-based queries
-        if any(w in q for w in ['what to wear', 'what should i wear', 'outfit for', 'dress for', 
-                                'something for', 'need something', 'looking for something']):
+        # =====================================================================
+        # STEP 3: PRODUCT-SPECIFIC QUERIES (HIGHEST PRIORITY!)
+        # If user mentioned a specific product → route to product info/stock
+        # =====================================================================
+        
+        attribute_keywords = ['color', 'colour', 'size', 'sizes', 'stock', 'available', 
+                              'material', 'fabric', 'price', 'cost', 'how much', 
+                              'do you have', 'in stock', 'tell me about']
+        
+        if mentioned_product:
+            # Update state with the mentioned product
+            state.set_current_product(mentioned_product)
+            extracted['product_mentioned'] = mentioned_product['product_name']
+            
+            # Check if asking about specific attribute
+            if any(kw in q for kw in attribute_keywords):
+                print(f"   → _handle_product_info (product + attribute)")
+                return self._handle_product_info(query, state, extracted)
+            
+            # Just mentioned product - show its info
+            print(f"   → _handle_product_info (product mentioned)")
+            return self._handle_product_info(query, state, extracted)
+        
+        # =====================================================================
+        # STEP 4: GENERIC QUERIES (no specific product mentioned)
+        # =====================================================================
+        
+        # What to wear questions
+        if any(w in q for w in ['what to wear', 'what should i wear', 'outfit for', 
+                                'something for', 'need something', 'looking for']):
+            print("   → _handle_recommendation (what to wear)")
             return self._handle_recommendation(query, state, extracted)
         
-        # Occasion keywords that imply recommendation
+        # Occasion-based recommendations
         occasion_words = ['gala', 'wedding', 'dinner', 'party', 'date', 'formal', 'casual', 
                          'cocktail', 'brunch', 'beach', 'vacation', 'office', 'work']
         if any(w in q for w in occasion_words):
+            print("   → _handle_recommendation (occasion)")
             return self._handle_recommendation(query, state, extracted)
         
-        # Category-only queries (dress, dresses, heels, etc.) - show products immediately
+        # Category queries (short queries about dress types)
         category_words = ['dress', 'dresses', 'jumpsuit', 'jumpsuits', 'heel', 'heels', 
                          'shoe', 'shoes', 'bag', 'bags', 'top', 'tops', 'set', 'sets']
-        # Check if query is primarily a category request (short query with category word)
         words = q.split()
-        if len(words) <= 3 and any(w in q for w in category_words):
+        if len(words) <= 5 and any(cw in words for cw in category_words):
+            print("   → _handle_recommendation (category)")
             return self._handle_recommendation(query, state, extracted)
         
         # Explicit recommendation requests
-        if any(w in q for w in ['recommend', 'suggest', 'show me', 'show', 'looking for', 
-                                'browse', 'what do you have', 'any', 'some']):
+        if any(w in q for w in ['recommend', 'suggest', 'show me', 'show', 'browse', 
+                                'what do you have', 'any', 'some']):
+            print("   → _handle_recommendation (explicit)")
             return self._handle_recommendation(query, state, extracted)
         
-        if any(w in q for w in ['stock', 'available', 'in stock', 'do you have']):
-            return self._handle_stock_check(query, state, extracted)
+        # Attribute question without product - use context or ask
+        if any(kw in q for kw in attribute_keywords):
+            if state.current_product:
+                extracted['product_mentioned'] = state.current_product
+                print(f"   → _handle_product_info (attribute + context: {state.current_product})")
+                return self._handle_product_info(query, state, extracted)
+            return AgentResponse(
+                message="Which product would you like to know about? Please mention the product name, or browse our collection! 💕"
+            )
         
-        if any(w in q for w in ['price', 'cost', 'how much']):
-            return self._handle_price(query, state, extracted)
-        
-        if any(w in q for w in ['color', 'colour', 'size', 'material', 'fabric', 'tell me about', 'what is']):
-            return self._handle_product_info(query, state, extracted)
-        
-        # Check if a specific product is mentioned - show product info
-        if extracted.get('product_mentioned'):
-            return self._handle_product_info(query, state, extracted)
-        
-        # Default: treat as recommendation request
+        # Default: recommendation
+        print("   → _handle_recommendation (default)")
         return self._handle_recommendation(query, state, extracted)
     
     def _find_product(self, name: str) -> Optional[Dict]:
@@ -628,14 +761,39 @@ class InfoAgent:
         matching = [p for p in self.products if 
                    category.lower() in p.get('product_type', '').lower() 
                    or category.lower() in p.get('product_collection', '').lower()
-                   or category.lower() in p.get('product_name', '').lower()]
+                   or category.lower() in p.get('product_name', '').lower()
+                   or category.lower() in p.get('subcategory', '').lower()]
+        
+        # Also filter by occasion if mentioned
+        if context['mentioned_occasions']:
+            occasion_matches = []
+            for p in matching:
+                p_occasions = p.get('occasions', [])
+                p_vibes = p.get('vibe_tags', [])
+                if isinstance(p_occasions, str):
+                    p_occasions = [p_occasions]
+                if isinstance(p_vibes, str):
+                    p_vibes = [p_vibes]
+                # Check if product matches any mentioned occasion
+                for occ in context['mentioned_occasions']:
+                    if occ in str(p_occasions).lower() or occ in str(p_vibes).lower():
+                        occasion_matches.append(p)
+                        break
+            if occasion_matches:
+                matching = occasion_matches
         
         # If no matches, show all products
         if not matching:
             matching = self.products
         
-        # Sort by newness and limit
-        matching = sorted(matching, key=lambda x: x.get('created_at', ''), reverse=True)[:8]
+        # Add variety: shuffle then take top 10 (so different products each time)
+        if len(matching) > 10:
+            # Shuffle and pick 10 for variety
+            shuffled = matching.copy()
+            random.shuffle(shuffled)
+            matching = shuffled[:10]
+        else:
+            matching = matching[:10]
         
         if matching:
             # Update state
@@ -713,7 +871,7 @@ IMPORTANT RULES:
         
         return AgentResponse(
             message=f"Let me show you our latest {category.lower()}s!",
-            products_to_show=self.products[:8]
+            products_to_show=self.products[:10]
         )
     
     def _handle_stock_check(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
@@ -721,7 +879,21 @@ IMPORTANT RULES:
         product_name = extracted.get('product_mentioned')
         product = self._find_product(product_name)
         
-        # If no product specified, use current context
+        # If no product specified, try to find from query
+        if not product:
+            q_lower = query.lower()
+            for p in self.products:
+                pname = p['product_name'].lower()
+                if pname in q_lower:
+                    product = p
+                    break
+                # Partial match
+                pname_parts = pname.split()
+                if any(part in q_lower for part in pname_parts if len(part) > 3):
+                    product = p
+                    break
+        
+        # If still no product, use current context
         if not product and state.current_product:
             product = self._find_product(state.current_product)
         
@@ -742,21 +914,29 @@ IMPORTANT RULES:
         if self.client:
             try:
                 messages = [
-                    {"role": "system", "content": f"You are a helpful fashion assistant. Answer about {product['product_name']} stock. Be concise and helpful."},
-                    {"role": "user", "content": f"Query: {query}\nProduct: {product['product_name']}\nStock Info: {stock_info}"}
+                    {"role": "system", "content": f"""You are a helpful fashion assistant for ByNoemie.
+                    
+The user is asking about stock/availability for {product['product_name']}.
+
+STOCK INFORMATION:
+{stock_info}
+
+Answer their question directly using the stock information above. 
+Be friendly, concise, and include the specific colors and sizes available with quantities."""},
+                    {"role": "user", "content": query}
                 ]
                 response = self.client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=messages,
-                    max_tokens=150,
+                    max_tokens=200,
                     temperature=0.7
                 )
                 return AgentResponse(
                     message=response.choices[0].message.content,
                     products_to_show=[product]
                 )
-            except:
-                pass
+            except Exception as e:
+                print(f"LLM error in _handle_stock_check: {e}")
         
         return AgentResponse(message=stock_info, products_to_show=[product])
     
@@ -781,6 +961,20 @@ IMPORTANT RULES:
         product_name = extracted.get('product_mentioned')
         product = self._find_product(product_name)
         
+        # If no product, try to find it directly in the query
+        if not product:
+            q_lower = query.lower()
+            for p in self.products:
+                pname = p['product_name'].lower()
+                if pname in q_lower:
+                    product = p
+                    break
+                # Also check partial matches (e.g., "coco" for "Coco Dress")
+                pname_parts = pname.split()
+                if any(part in q_lower for part in pname_parts if len(part) > 3):
+                    product = p
+                    break
+        
         # If no product but we have current context from state
         if not product and state.current_product:
             product = self._find_product(state.current_product)
@@ -793,15 +987,32 @@ IMPORTANT RULES:
                     product = p
                     break
         
-        # Search in current query for any product name
-        if not product:
-            for p in self.products:
-                if p['product_name'].lower() in query.lower():
-                    product = p
-                    break
-        
         if product:
             state.set_current_product(product)
+            
+            # Get detailed stock info if available
+            product_name_lower = product['product_name'].lower()
+            stock_info = self.stock_data.get(product_name_lower, {})
+            
+            # Debug logging
+            print(f"🔍 Looking up stock for: '{product_name_lower}'")
+            print(f"   Stock data keys: {list(self.stock_data.keys())[:5]}")
+            print(f"   Found stock_info: {bool(stock_info)}")
+            if stock_info:
+                print(f"   Variants: {stock_info.get('variants', [])}")
+            
+            # Build variant details if available
+            variant_details = ""
+            if stock_info and 'variants' in stock_info:
+                variants = stock_info['variants']
+                variant_lines = []
+                for v in variants:
+                    color = v.get('color', 'N/A')
+                    size = v.get('size', 'N/A')
+                    qty = v.get('quantity', 0)
+                    status = "✓ In Stock" if qty > 0 else "✗ Out of Stock"
+                    variant_lines.append(f"  • {color} / {size}: {qty} available {status}")
+                variant_details = "\n".join(variant_lines)
             
             # Build product info
             info = {
@@ -810,7 +1021,9 @@ IMPORTANT RULES:
                 "colors": product.get('colors_available', 'N/A'),
                 "sizes": product.get('size_options', 'N/A'),
                 "material": product.get('material', 'N/A'),
-                "description": product.get('product_description', '')[:200]
+                "description": product.get('product_description', '')[:200],
+                "variant_details": variant_details,
+                "total_inventory": stock_info.get('total_inventory', product.get('total_inventory', 'N/A'))
             }
             
             # Get context from history
@@ -818,39 +1031,62 @@ IMPORTANT RULES:
             
             if self.client:
                 try:
-                    # Include conversation history for context
-                    messages = [
-                        {"role": "system", "content": f"""You are a helpful fashion assistant for ByNoemie.
-                        
-CONTEXT from conversation:
-- Occasions mentioned: {', '.join(context['mentioned_occasions']) or 'none'}
-- Colors mentioned: {', '.join(context['mentioned_colors']) or 'none'}
+                    # Build a focused, clear system prompt
+                    system_prompt = f"""You are a friendly fashion assistant for ByNoemie, a Malaysian fashion boutique.
 
-Provide product info naturally. Focus on what the user asked about.
-If they asked about colors, sizes, or specific attributes, answer that directly."""}
-                    ]
+═══════════════════════════════════════════════════════════
+PRODUCT: {info['name']}
+═══════════════════════════════════════════════════════════
+💰 Price: {info['price']}
+🎨 Colors: {info['colors']}
+📏 Sizes: {info['sizes']}
+🧵 Material: {info['material']}
+📦 Total Stock: {info['total_inventory']} units
+
+STOCK DETAILS:
+{info['variant_details'] if info['variant_details'] else 'Standard stock available'}
+═══════════════════════════════════════════════════════════
+
+INSTRUCTIONS:
+1. Answer the user's question DIRECTLY using ONLY the product data above
+2. If asked about colors → List the exact colors with quantities
+3. If asked about sizes → List the exact sizes available
+4. If asked about stock → Show variant availability
+5. Keep response SHORT (2-3 sentences max)
+6. Be warm and helpful, use emojis sparingly
+7. End with a soft call-to-action (e.g., "Would you like to order?")
+
+DO NOT:
+- Recommend other products unless asked
+- Make up information not in the data
+- Give long explanations"""
+
+                    messages = [{"role": "system", "content": system_prompt}]
                     
-                    # Add conversation history
-                    for msg in state.get_recent_history(4):
-                        messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")[:150]})
+                    # Add recent conversation for context
+                    for msg in state.get_recent_history(3):
+                        messages.append({
+                            "role": msg.get("role", "user"), 
+                            "content": msg.get("content", "")[:200]
+                        })
                     
-                    messages.append({"role": "user", "content": f"Query: {query}\nProduct Info: {json.dumps(info)}"})
+                    messages.append({"role": "user", "content": query})
                     
                     response = self.client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=messages,
-                        max_tokens=200,
-                        temperature=0.7
+                        max_tokens=150,
+                        temperature=0.6  # Slightly lower for more focused answers
                     )
                     return AgentResponse(
                         message=response.choices[0].message.content,
                         products_to_show=[product]
                     )
-                except:
-                    pass
+                except Exception as e:
+                    print(f"LLM error in _handle_product_info: {e}")
             
             return AgentResponse(
-                message=f"**{info['name']}** - {info['price']}\n\nColors: {info['colors']}\nSizes: {info['sizes']}\n\n{info['description']}",
+                message=f"**{info['name']}** - {info['price']}\n\n🎨 **Colors**: {info['colors']}\n📏 **Sizes**: {info['sizes']}\n📦 **Total Stock**: {info['total_inventory']} units\n\n**Stock by Variant:**\n{info['variant_details'] if info['variant_details'] else 'Contact us for stock details'}",
                 products_to_show=[product]
             )
         
@@ -858,21 +1094,40 @@ If they asked about colors, sizes, or specific attributes, answer that directly.
     
     def _get_stock_info(self, product: Dict, size: str = None, color: str = None) -> str:
         """Get stock information for a product"""
-        product_handle = product.get('product_handle', '')
-        stock = self.stock_data.get(product_handle, {})
+        # Use product_name (lowercase) as key - matches how stock_data is keyed
+        product_name_lower = product.get('product_name', '').lower()
+        stock = self.stock_data.get(product_name_lower, {})
+        
+        print(f"🔍 _get_stock_info: Looking for '{product_name_lower}'")
+        print(f"   Stock found: {bool(stock)}")
+        
+        if not stock:
+            # Fallback: check with product_handle too
+            product_handle = product.get('product_handle', '')
+            stock = self.stock_data.get(product_handle, {})
+            print(f"   Fallback to handle '{product_handle}': {bool(stock)}")
         
         if not stock:
             return f"{product['product_name']} - Stock information not available. Please contact us."
         
-        available_sizes = product.get('size_options', '').split(',')
-        available_colors = product.get('colors_available', '').split(',')
+        # Build detailed stock info from variants
+        info = f"**{product['product_name']}**\n\n"
         
-        info = f"**{product['product_name']}**\n"
-        info += f"Available sizes: {', '.join([s.strip() for s in available_sizes])}\n"
-        info += f"Available colors: {', '.join([c.strip() for c in available_colors])}\n"
-        
-        if size:
-            info += f"\nSize {size}: {'In Stock ✅' if size.upper() in [s.strip().upper() for s in available_sizes] else 'May be limited'}"
+        if 'variants' in stock:
+            info += "📦 **Stock by Variant:**\n"
+            for v in stock['variants']:
+                color = v.get('color', 'N/A')
+                vsize = v.get('size', 'N/A')
+                qty = v.get('quantity', 0)
+                status = "✅ In Stock" if qty > 0 else "❌ Out of Stock"
+                info += f"  • {color} / {vsize}: {qty} available {status}\n"
+            info += f"\n**Total Inventory:** {stock.get('total_inventory', 'N/A')} units"
+        else:
+            # Fallback to product data
+            available_sizes = product.get('size_options', '').split(',')
+            available_colors = product.get('colors_available', '').split(',')
+            info += f"Available sizes: {', '.join([s.strip() for s in available_sizes])}\n"
+            info += f"Available colors: {', '.join([c.strip() for c in available_colors])}\n"
         
         return info
 
@@ -905,10 +1160,14 @@ class ActionAgent:
         q = query.lower()
         
         # Determine action type
-        if any(w in q for w in ['cancel order', 'cancel my order', 'delete order']):
+        cancel_keywords = ['cancel order', 'cancel my order', 'delete order', 'delete my order',
+                          'remove order', 'remove my order', 'remove the order']
+        if any(w in q for w in cancel_keywords):
             return self._handle_cancel_order(query, state, extracted)
         
-        if any(w in q for w in ['modify order', 'change order', 'update order', 'edit order']):
+        modify_keywords = ['modify order', 'modify my order', 'change order', 'change my order',
+                          'update order', 'update my order', 'edit order', 'edit my order']
+        if any(w in q for w in modify_keywords):
             return self._handle_modify_order(query, state, extracted)
         
         if any(w in q for w in ['update profile', 'change my address', 'update my info']):
@@ -1165,6 +1424,27 @@ _Type anything else to cancel._""",
             return AgentResponse(message="Order management is currently unavailable.")
         
         order_id = extracted.get('order_id')
+        product_mentioned = extracted.get('product_mentioned')
+        
+        # If no order_id but product mentioned, try to find order by product
+        if not order_id and product_mentioned:
+            user_orders = self.order_manager.get_orders_by_user(state.current_user_id)
+            # Find orders for this product
+            matching_orders = [
+                o for o in user_orders 
+                if product_mentioned.lower() in o.get('product_name', '').lower()
+                and self.order_manager.can_cancel_order(o['order_id'])[0]
+            ]
+            if len(matching_orders) == 1:
+                order_id = matching_orders[0]['order_id']
+            elif len(matching_orders) > 1:
+                orders_list = "\n".join([
+                    f"• **{o['order_id']}**: {o['product_name']} ({o.get('size', 'N/A')}/{o.get('color', 'N/A')}) - {o['status'].replace('_', ' ').title()}" 
+                    for o in matching_orders
+                ])
+                return AgentResponse(
+                    message=f"📋 **Multiple orders found for {product_mentioned}:**\n\n{orders_list}\n\nWhich order would you like to cancel? Please specify the Order ID."
+                )
         
         if not order_id:
             # List cancellable orders
@@ -1172,7 +1452,7 @@ _Type anything else to cancel._""",
             cancellable = [o for o in user_orders if self.order_manager.can_cancel_order(o['order_id'])[0]]
             
             if cancellable:
-                orders_list = "\n".join([f"• **{o['order_id']}**: {o['product_name']} - {o['status'].replace('_', ' ').title()}" for o in cancellable[:5]])
+                orders_list = "\n".join([f"• **{o['order_id']}**: {o['product_name']} - {o['status'].replace('_', ' ').title()}" for o in cancellable[:10]])
                 return AgentResponse(
                     message=f"📋 **Orders you can cancel:**\n\n{orders_list}\n\nWhich order would you like to cancel? (e.g., 'Cancel ORD-004')"
                 )
@@ -1258,7 +1538,7 @@ class ConfirmationAgent:
         data = state.pending_action.get('data', {})
         
         try:
-            order = self.order_manager.create_order(
+            order = self.order_manager.create_order_simple(
                 user_id=state.current_user_id,
                 product=data.get('product', {}),
                 size=data.get('size', 'M'),
@@ -1388,18 +1668,18 @@ class ChatbotOrchestrator:
     def process(self, query: str, chat_history: List[Dict] = None) -> AgentResponse:
         """
         Process a user query:
-        1. Sync state from external history (Streamlit session)
+        1. Sync state from external history
         2. Route to appropriate agent
         3. Execute agent
         4. Update state
         5. Return response
-        
-        Args:
-            query: User's message
-            chat_history: External chat history (from Streamlit session_state.messages)
         """
-        # CRITICAL: Sync state from external history to ensure context is preserved
-        # Streamlit's session_state.messages is the source of truth
+        print(f"\n{'='*50}")
+        print(f"🤖 ORCHESTRATOR: Processing query: '{query}'")
+        
+        # Sync conversation history but PRESERVE pending_action
+        saved_pending_action = self.state.pending_action
+        
         if chat_history:
             self.state.conversation_history = []
             for msg in chat_history:
@@ -1409,15 +1689,25 @@ class ChatbotOrchestrator:
                     msg.get("metadata")
                 )
         
+        # Restore pending_action (it shouldn't be cleared by history sync)
+        if saved_pending_action and not self.state.pending_action:
+            self.state.pending_action = saved_pending_action
+        
         # Add current user message to history
         self.state.add_message("user", query)
         
         # Route query
         agent_type, extracted = self.router.route(query, self.state)
+        print(f"🎯 Router selected: {agent_type.value}")
+        print(f"   Extracted: {extracted}")
+        print(f"   Pending action: {self.state.pending_action}")
         
-        # Get agent and process
+        # Get agent and process (ONLY ONCE!)
         agent = self.agents.get(agent_type, self.info_agent)
+        print(f"📌 Calling agent: {type(agent).__name__}")
         response = agent.handle(query, self.state, extracted)
+        print(f"💬 Response: {response.message[:100]}...")
+        print(f"{'='*50}\n")
         
         # Update state
         self.state.add_message("assistant", response.message, {"agent": agent_type.value})

@@ -40,6 +40,12 @@ class OrderManager:
         stock_json_path: str = "data/stock/stock_inventory.json",
         chroma_db_path: str = "data/embeddings/chroma_db"
     ):
+        # Check for alternative order files
+        if not os.path.exists(orders_json_path):
+            alt_path = "data/orders/sample_orders.json"
+            if os.path.exists(alt_path):
+                orders_json_path = alt_path
+        
         self.orders_json_path = orders_json_path
         self.stock_json_path = stock_json_path
         self.chroma_db_path = chroma_db_path
@@ -101,13 +107,13 @@ class OrderManager:
         return {"orders": [], "last_updated": None}
     
     def _load_stock(self) -> Dict:
-        """Load stock from JSON"""
+        """Load stock from JSON, keyed by product_name (lowercase) for consistency"""
         if os.path.exists(self.stock_json_path):
             with open(self.stock_json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Convert to dict keyed by product_id
+                # Convert to dict keyed by product_name (lowercase) for easy lookup
                 if isinstance(data, list):
-                    return {str(item['product_id']): item for item in data}
+                    return {item.get('product_name', '').lower(): item for item in data}
                 return data
         return {}
     
@@ -274,6 +280,103 @@ class OrderManager:
         
         print(f"Variant {size}/{color} not found for product {product_id}")
         return False
+    
+    def create_order_simple(
+        self,
+        user_id: str,
+        product: Dict,
+        size: str = "Free Size",
+        color: str = "Default",
+        quantity: int = 1
+    ) -> Dict:
+        """
+        Simplified order creation for agent use.
+        Returns order dict directly or raises exception.
+        Also UPDATES STOCK after successful order.
+        """
+        import random
+        from datetime import datetime, timedelta
+        
+        # Generate order ID
+        order_id = f"ORD-{random.randint(10000, 99999)}"
+        
+        # Get product details
+        product_name = product.get('product_name', 'Unknown Product')
+        product_id = str(product.get('product_id', ''))
+        price = product.get('price_min', 0)
+        currency = product.get('price_currency', 'MYR')
+        
+        # Create order dict
+        order = {
+            "order_id": order_id,
+            "user_id": user_id,
+            "product_id": product_id,
+            "product_name": product_name,
+            "size": size,
+            "color": color,
+            "quantity": quantity,
+            "unit_price": price,
+            "total_price": price * quantity,
+            "currency": currency,
+            "status": "confirmed",
+            "created_at": datetime.now().isoformat(),
+            "estimated_delivery": (datetime.now() + timedelta(days=5)).strftime("%Y-%m-%d")
+        }
+        
+        # Save to orders - self.orders is a dict with "orders" list
+        if "orders" not in self.orders:
+            self.orders["orders"] = []
+        self.orders["orders"].append(order)
+        self._save_orders()
+        
+        # =====================================================
+        # UPDATE STOCK - Reduce inventory after order
+        # =====================================================
+        self._reduce_stock(product_name, size, color, quantity)
+        
+        print(f"✅ Order created: {order_id}")
+        print(f"📦 Stock updated: -{quantity} for {product_name} ({color}/{size})")
+        return order
+    
+    def _reduce_stock(self, product_name: str, size: str, color: str, quantity: int):
+        """Reduce stock for a product variant after order"""
+        product_key = product_name.lower()
+        
+        if product_key not in self.stock:
+            print(f"⚠️ Product '{product_name}' not found in stock data")
+            return
+        
+        product_stock = self.stock[product_key]
+        
+        # Find and update the matching variant
+        if 'variants' in product_stock:
+            for variant in product_stock['variants']:
+                variant_size = variant.get('size', '').lower()
+                variant_color = variant.get('color', '').lower()
+                
+                # Match by size and color (case insensitive)
+                if (variant_size == size.lower() or size.lower() in variant_size or variant_size in size.lower()) and \
+                   (variant_color == color.lower() or color.lower() in variant_color or variant_color in color.lower()):
+                    
+                    old_qty = variant.get('quantity', 0)
+                    new_qty = max(0, old_qty - quantity)
+                    variant['quantity'] = new_qty
+                    
+                    # Update status if out of stock
+                    if new_qty == 0:
+                        variant['status'] = 'out_of_stock'
+                    elif new_qty <= 3:
+                        variant['status'] = 'low_stock'
+                    
+                    print(f"   Stock reduced: {old_qty} → {new_qty} for {color}/{size}")
+                    break
+            
+            # Update total inventory
+            total = sum(v.get('quantity', 0) for v in product_stock['variants'])
+            product_stock['total_inventory'] = total
+        
+        # Save updated stock
+        self._save_stock()
     
     def create_order(
         self,
@@ -533,6 +636,90 @@ class OrderManager:
     def get_orders_by_customer(self, customer_email: str) -> List[Dict]:
         """Get all orders for a customer"""
         return [o for o in self.orders["orders"] if o.get("customer_email") == customer_email]
+    
+    def get_orders_by_user(self, user_id: str) -> List[Dict]:
+        """Get all orders for a user by user_id"""
+        return [o for o in self.orders["orders"] if o.get("user_id") == user_id]
+    
+    def can_cancel_order(self, order_id: str) -> Tuple[bool, str]:
+        """Check if an order can be cancelled"""
+        order = self.get_order(order_id)
+        if not order:
+            return False, "Order not found"
+        
+        status = order.get("status", "").lower()
+        
+        # Orders that can be cancelled
+        cancellable_statuses = ["confirmed", "pending", "processing"]
+        if status in cancellable_statuses:
+            return True, "Order can be cancelled"
+        
+        # Orders that cannot be cancelled
+        if status in ["shipped", "delivered", "cancelled"]:
+            return False, f"Order is already {status}"
+        
+        return False, f"Order status '{status}' does not allow cancellation"
+    
+    def cancel_order(self, order_id: str) -> Tuple[bool, str, Optional[Dict]]:
+        """Cancel an order and restore stock"""
+        order = self.get_order(order_id)
+        if not order:
+            return False, "Order not found", None
+        
+        can_cancel, reason = self.can_cancel_order(order_id)
+        if not can_cancel:
+            return False, reason, None
+        
+        # Update order status
+        for i, o in enumerate(self.orders["orders"]):
+            if o["order_id"] == order_id:
+                self.orders["orders"][i]["status"] = "cancelled"
+                self.orders["orders"][i]["cancelled_at"] = datetime.now().isoformat()
+                break
+        
+        # Restore stock
+        product_name = order.get("product_name", "")
+        size = order.get("size", "")
+        color = order.get("color", "")
+        quantity = order.get("quantity", 1)
+        
+        self._restore_stock(product_name, size, color, quantity)
+        
+        self._save_orders()
+        
+        return True, "Order cancelled successfully", order
+    
+    def _restore_stock(self, product_name: str, size: str, color: str, quantity: int):
+        """Restore stock after order cancellation"""
+        product_key = product_name.lower()
+        
+        if product_key not in self.stock:
+            print(f"⚠️ Product '{product_name}' not found in stock for restoration")
+            return
+        
+        product_stock = self.stock[product_key]
+        
+        if 'variants' in product_stock:
+            for variant in product_stock['variants']:
+                variant_size = variant.get('size', '').lower()
+                variant_color = variant.get('color', '').lower()
+                
+                if (variant_size == size.lower() or size.lower() in variant_size) and \
+                   (variant_color == color.lower() or color.lower() in variant_color):
+                    
+                    old_qty = variant.get('quantity', 0)
+                    new_qty = old_qty + quantity
+                    variant['quantity'] = new_qty
+                    variant['status'] = 'in_stock'
+                    
+                    print(f"   Stock restored: {old_qty} → {new_qty} for {color}/{size}")
+                    break
+            
+            # Update total inventory
+            total = sum(v.get('quantity', 0) for v in product_stock['variants'])
+            product_stock['total_inventory'] = total
+        
+        self._save_stock()
     
     def get_order_status(self, order_id: str) -> Optional[str]:
         """Get order status"""
