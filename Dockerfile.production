@@ -1,5 +1,5 @@
 # ByNoemie RAG Chatbot - Production Dockerfile
-# Fixed for flat project structure (no src/ folder)
+# Fixed for flat project structure
 
 FROM python:3.11-slim
 
@@ -18,46 +18,39 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Create directory structure FIRST
-RUN mkdir -p src data/products data/stock data/orders data/embeddings data/policies data/cache
+# Create directory structure
+RUN mkdir -p src static data/products data/stock data/orders data/embeddings data/policies data/cache
 
-# Copy all Python files
+# Copy all source files explicitly (no wildcards for optional files)
+# Copy Python files (required)
 COPY *.py ./
 
-# Copy config and data files
-COPY *.yaml ./ 2>/dev/null || true
-COPY *.json ./ 2>/dev/null || true
-COPY *.html ./ 2>/dev/null || true
+# Copy JSON files (required for data)
+COPY *.json ./
+
+# Copy HTML file
+COPY index.html ./
+COPY index.html static/
 
 # Setup src/ directory for imports (api.py imports from src.agents)
-RUN cp agents.py src/ 2>/dev/null || true && \
-    cp orders.py src/ 2>/dev/null || true && \
-    cp policy_rag.py src/ 2>/dev/null || true && \
-    cp database.py src/ 2>/dev/null || true && \
-    cp data_manager.py src/ 2>/dev/null || true && \
-    cp cache.py src/ 2>/dev/null || true && \
-    cp logger.py src/ 2>/dev/null || true && \
-    cp utils.py src/ 2>/dev/null || true && \
-    cp base.py src/ 2>/dev/null || true && \
-    cp openai_client.py src/ 2>/dev/null || true && \
-    cp groq_client.py src/ 2>/dev/null || true && \
-    cp templates.py src/ 2>/dev/null || true && \
-    cp rules.py src/ 2>/dev/null || true && \
-    cp workflow.py src/ 2>/dev/null || true && \
-    cp chainer.py src/ 2>/dev/null || true && \
-    cp error_handler.py src/ 2>/dev/null || true && \
-    cp rate_limiter.py src/ 2>/dev/null || true && \
-    cp token_counter.py src/ 2>/dev/null || true && \
-    cp few_shot.py src/ 2>/dev/null || true && \
-    cp data_processor.py src/ 2>/dev/null || true && \
-    cp scraper.py src/ 2>/dev/null || true && \
-    echo "" > src/__init__.py
+RUN for f in agents.py orders.py policy_rag.py database.py data_manager.py \
+    cache.py logger.py utils.py base.py openai_client.py groq_client.py \
+    templates.py rules.py workflow.py chainer.py error_handler.py \
+    rate_limiter.py token_counter.py few_shot.py data_processor.py scraper.py; do \
+    if [ -f "$f" ]; then cp "$f" src/; fi; \
+    done && \
+    touch src/__init__.py
 
 # Setup data directories with JSON files
-RUN cp bynoemie_products.json data/products/ 2>/dev/null || true && \
-    cp stock_inventory.json data/stock/ 2>/dev/null || true && \
-    cp sample_orders.json data/orders/ 2>/dev/null || true && \
-    cp policies.json data/policies/ 2>/dev/null || true
+RUN if [ -f "bynoemie_products.json" ]; then cp bynoemie_products.json data/products/; fi && \
+    if [ -f "stock_inventory.json" ]; then cp stock_inventory.json data/stock/; fi && \
+    if [ -f "sample_orders.json" ]; then cp sample_orders.json data/orders/; fi && \
+    if [ -f "policies.json" ]; then cp policies.json data/policies/; fi
+
+# Debug: Show what was copied
+RUN echo "=== Files in /app ===" && ls -la && \
+    echo "=== Files in /app/src ===" && ls -la src/ && \
+    echo "=== Files in /app/static ===" && ls -la static/
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
