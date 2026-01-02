@@ -1,109 +1,76 @@
 # ByNoemie RAG Chatbot - Production Dockerfile
-# Supports both Streamlit UI and FastAPI modes
+# Fixed for flat project structure (no src/ folder)
 
-# =============================================================================
-# Stage 1: Builder
-# =============================================================================
-FROM python:3.11-slim as builder
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install build dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Copy requirements first (for better caching)
+COPY requirements.txt .
 
 # Install Python dependencies
-COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir uvicorn[standard] gunicorn
+    pip install --no-cache-dir -r requirements.txt
 
-# =============================================================================
-# Stage 2: Production Runtime
-# =============================================================================
-FROM python:3.11-slim as production
+# Create directory structure FIRST
+RUN mkdir -p src data/products data/stock data/orders data/embeddings data/policies data/cache
 
-WORKDIR /app
+# Copy all Python files
+COPY *.py ./
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --shell /bin/bash appuser
+# Copy config and data files
+COPY *.yaml ./ 2>/dev/null || true
+COPY *.json ./ 2>/dev/null || true
+COPY *.html ./ 2>/dev/null || true
 
-# Copy virtual environment from builder
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Setup src/ directory for imports (api.py imports from src.agents)
+RUN cp agents.py src/ 2>/dev/null || true && \
+    cp orders.py src/ 2>/dev/null || true && \
+    cp policy_rag.py src/ 2>/dev/null || true && \
+    cp database.py src/ 2>/dev/null || true && \
+    cp data_manager.py src/ 2>/dev/null || true && \
+    cp cache.py src/ 2>/dev/null || true && \
+    cp logger.py src/ 2>/dev/null || true && \
+    cp utils.py src/ 2>/dev/null || true && \
+    cp base.py src/ 2>/dev/null || true && \
+    cp openai_client.py src/ 2>/dev/null || true && \
+    cp groq_client.py src/ 2>/dev/null || true && \
+    cp templates.py src/ 2>/dev/null || true && \
+    cp rules.py src/ 2>/dev/null || true && \
+    cp workflow.py src/ 2>/dev/null || true && \
+    cp chainer.py src/ 2>/dev/null || true && \
+    cp error_handler.py src/ 2>/dev/null || true && \
+    cp rate_limiter.py src/ 2>/dev/null || true && \
+    cp token_counter.py src/ 2>/dev/null || true && \
+    cp few_shot.py src/ 2>/dev/null || true && \
+    cp data_processor.py src/ 2>/dev/null || true && \
+    cp scraper.py src/ 2>/dev/null || true && \
+    echo "" > src/__init__.py
 
-# Copy application code
-COPY config/ ./config/
-COPY src/ ./src/
-COPY data/ ./data/
-COPY app.py ./
-COPY api.py ./
-COPY main.py ./
-COPY setup.py ./
-
-# Create data directories
-RUN mkdir -p data/cache data/outputs data/embeddings data/products data/stock data/feedback data/policies \
-    && chown -R appuser:appuser /app
-
-# Switch to non-root user
-USER appuser
+# Setup data directories with JSON files
+RUN cp bynoemie_products.json data/products/ 2>/dev/null || true && \
+    cp stock_inventory.json data/stock/ 2>/dev/null || true && \
+    cp sample_orders.json data/orders/ 2>/dev/null || true && \
+    cp policies.json data/policies/ 2>/dev/null || true
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
-    PORT=8000
+    PORT=8501
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Expose port
-EXPOSE 8000 8501
+EXPOSE ${PORT}
 
-# Default: API mode
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# =============================================================================
-# Stage 3: Streamlit UI
-# =============================================================================
-FROM production as streamlit
-
-# Streamlit specific config
-ENV STREAMLIT_SERVER_PORT=8501 \
-    STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
-    STREAMLIT_SERVER_HEADLESS=true \
-    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
-
-# Health check for Streamlit
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8501/_stcore/health || exit 1
-
-EXPOSE 8501
-
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
-
-# =============================================================================
-# Usage:
-# =============================================================================
-# Build API image:
-#   docker build -t bynoemie-api .
-#
-# Build Streamlit image:
-#   docker build --target streamlit -t bynoemie-ui .
-#
-# Run API:
-#   docker run -d -p 8000:8000 -e OPENAI_API_KEY=$OPENAI_API_KEY bynoemie-api
-#
-# Run Streamlit:
-#   docker run -d -p 8501:8501 -e OPENAI_API_KEY=$OPENAI_API_KEY bynoemie-ui
-# =============================================================================
+# Run the API
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT}"]
