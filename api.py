@@ -79,6 +79,10 @@ def load_images():
             return images
     return {}
 
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "bynoemie-chatbot"}
+
 products = load_products()
 stock_data = load_stock()
 images_data = load_images()
