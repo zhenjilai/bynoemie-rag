@@ -377,6 +377,53 @@ class OrderManager:
         
         # Save updated stock
         self._save_stock()
+        
+    def _restore_stock(self, product_name: str, size: str, color: str, quantity: int):
+        """
+        Restore stock for a product variant.
+        Used when modifying or cancelling orders.
+        """
+        product_key = product_name.lower()
+        
+        if product_key not in self.stock:
+            print(f"Warning: '{product_name}' not in stock data")
+            return
+        
+        product_stock = self.stock[product_key]
+        
+        if 'variants' not in product_stock:
+            return
+            
+        found = False
+        for variant in product_stock['variants']:
+            v_size = variant.get('size', '').upper()
+            v_color = variant.get('color', '').lower()
+            
+            if v_size == size.upper() and v_color == color.lower():
+                old_qty = variant.get('quantity', 0)
+                new_qty = old_qty + quantity
+                variant['quantity'] = new_qty
+                
+                # Update status
+                if new_qty > 3:
+                    variant['status'] = 'in_stock'
+                elif new_qty > 0:
+                    variant['status'] = 'low_stock'
+                else:
+                    variant['status'] = 'out_of_stock'
+                
+                print(f"  Stock restored: {old_qty} -> {new_qty} for {color}/{size}")
+                found = True
+                break
+        
+        if not found:
+            print(f"Warning: Variant {size}/{color} not found")
+        
+        # Update total
+        total = sum(v.get('quantity', 0) for v in product_stock['variants'])
+        product_stock['total_inventory'] = total
+        
+        self._save_stock()
     
     def create_order(
         self,
@@ -578,6 +625,100 @@ class OrderManager:
         
         return True, f"Order {order_id} updated: {'; '.join(changes)}"
     
+    def modify_order_simple(
+        self,
+        order_id: str,
+        new_size: str = None,
+        new_color: str = None,
+        new_quantity: int = None,
+        old_size: str = None,
+        old_color: str = None
+    ) -> Tuple[bool, str, Optional[Dict]]:
+        """
+        Simplified order modification for agent use.
+        Handles stock restoration and reduction automatically.
+        
+        Returns: (success, message, updated_order)
+        """
+        # Find order
+        order = None
+        order_index = None
+        for i, o in enumerate(self.orders["orders"]):
+            if o["order_id"] == order_id:
+                order = o
+                order_index = i
+                break
+        
+        if not order:
+            return False, f"Order {order_id} not found.", None
+        
+        # Check status
+        blocked_statuses = [OrderStatus.SHIPPED.value, OrderStatus.DELIVERED.value, 
+                          OrderStatus.CANCELLED.value, OrderStatus.REFUNDED.value]
+        if order.get("status") in blocked_statuses:
+            return False, f"Cannot modify order. Status: {order.get('status')}", None
+        
+        # Get current values
+        old_size = old_size or order.get('size', '')
+        old_color = old_color or order.get('color', '')
+        quantity = new_quantity if new_quantity else order.get('quantity', 1)
+        
+        # New values
+        final_size = new_size if new_size else order.get('size', '')
+        final_color = new_color if new_color else order.get('color', '')
+        product_name = order.get('product_name', '').lower()
+        
+        changes = []
+        
+        # Handle stock if variant changed
+        size_changed = new_size and new_size.upper() != old_size.upper()
+        color_changed = new_color and new_color.lower() != old_color.lower()
+        
+        if size_changed or color_changed:
+            # Restore old variant stock
+            self._restore_stock(product_name, old_size, old_color, quantity)
+            print(f"Stock restored: +{quantity} for {product_name} ({old_color}/{old_size})")
+            
+            # Reduce new variant stock
+            self._reduce_stock(product_name, final_size, final_color, quantity)
+            print(f"Stock reduced: -{quantity} for {product_name} ({final_color}/{final_size})")
+        
+        # Apply changes
+        if new_size and new_size.upper() != order.get('size', '').upper():
+            old_val = order.get('size', '')
+            order['size'] = new_size.upper()
+            changes.append(f"Size: {old_val} -> {new_size.upper()}")
+        
+        if new_color and new_color.lower() != order.get('color', '').lower():
+            old_val = order.get('color', '')
+            order['color'] = new_color.capitalize()
+            changes.append(f"Color: {old_val} -> {new_color.capitalize()}")
+        
+        if new_quantity and new_quantity != order.get('quantity'):
+            old_val = order.get('quantity', 1)
+            order['quantity'] = new_quantity
+            order['total_price'] = order.get('unit_price', 0) * new_quantity
+            changes.append(f"Quantity: {old_val} -> {new_quantity}")
+        
+        if not changes:
+            return False, "No changes to apply.", order
+        
+        # Update metadata
+        order["updated_at"] = datetime.now().isoformat()
+        if "history" not in order:
+            order["history"] = []
+        order["history"].append({
+            "action": "modified",
+            "timestamp": datetime.now().isoformat(),
+            "details": "; ".join(changes)
+        })
+        
+        # Save
+        self.orders["orders"][order_index] = order
+        self._save_orders()
+        
+        return True, "; ".join(changes), order
+    
     def cancel_order(self, order_id: str, reason: str = "") -> Tuple[bool, str]:
         """
         Cancel an order and restore stock.
@@ -659,6 +800,119 @@ class OrderManager:
             return False, f"Order is already {status}"
         
         return False, f"Order status '{status}' does not allow cancellation"
+    
+    def can_modify_order(self, order_id: str) -> Tuple[bool, str]:
+        """Check if an order can be modified"""
+        order = self.get_order(order_id)
+        if not order:
+            return False, "Order not found"
+        
+        status = order.get("status", "").lower()
+        
+        # Orders that can be modified
+        modifiable_statuses = ["confirmed", "pending", "processing"]
+        if status in modifiable_statuses:
+            return True, "Order can be modified"
+        
+        # Orders that cannot be modified
+        if status in ["shipped", "delivered", "cancelled", "refunded"]:
+            return False, f"Order is already {status} and cannot be modified"
+        
+        return False, f"Order status '{status}' does not allow modification"
+    
+    def modify_order_simple(
+        self,
+        order_id: str,
+        new_size: str = None,
+        new_color: str = None,
+        new_quantity: int = None,
+        old_size: str = None,
+        old_color: str = None
+    ) -> Tuple[bool, str, Optional[Dict]]:
+        """
+        Simplified order modification for agent use.
+        Handles stock restoration and reduction automatically.
+        
+        Returns: (success, message, updated_order)
+        """
+        # Find order
+        order = None
+        order_index = None
+        for i, o in enumerate(self.orders["orders"]):
+            if o["order_id"] == order_id:
+                order = o
+                order_index = i
+                break
+        
+        if not order:
+            return False, f"Order {order_id} not found.", None
+        
+        # Check status
+        can_modify, reason = self.can_modify_order(order_id)
+        if not can_modify:
+            return False, reason, None
+        
+        # Get current values
+        old_size = old_size or order.get('size', '')
+        old_color = old_color or order.get('color', '')
+        quantity = new_quantity if new_quantity else order.get('quantity', 1)
+        
+        # New values
+        final_size = new_size if new_size else order.get('size', '')
+        final_color = new_color if new_color else order.get('color', '')
+        product_name = order.get('product_name', '')
+        
+        changes = []
+        
+        # Handle stock if variant changed
+        size_changed = new_size and new_size.upper() != old_size.upper()
+        color_changed = new_color and new_color.lower() != old_color.lower()
+        
+        if size_changed or color_changed:
+            # Restore old variant stock
+            self._restore_stock(product_name, old_size, old_color, quantity)
+            print(f"   Stock restored: +{quantity} for {product_name} ({old_color}/{old_size})")
+            
+            # Reduce new variant stock
+            self._reduce_stock(product_name, final_size, final_color, quantity)
+            print(f"   Stock reduced: -{quantity} for {product_name} ({final_color}/{final_size})")
+        
+        # Apply changes
+        if new_size and new_size.upper() != order.get('size', '').upper():
+            old_val = order.get('size', '')
+            order['size'] = new_size.upper()
+            changes.append(f"Size: {old_val} → {new_size.upper()}")
+        
+        if new_color and new_color.lower() != order.get('color', '').lower():
+            old_val = order.get('color', '')
+            order['color'] = new_color.capitalize()
+            changes.append(f"Color: {old_val} → {new_color.capitalize()}")
+        
+        if new_quantity and new_quantity != order.get('quantity'):
+            old_val = order.get('quantity', 1)
+            order['quantity'] = new_quantity
+            order['total_price'] = order.get('unit_price', 0) * new_quantity
+            changes.append(f"Quantity: {old_val} → {new_quantity}")
+        
+        if not changes:
+            return False, "No changes to apply.", order
+        
+        # Update metadata
+        order["updated_at"] = datetime.now().isoformat()
+        if "history" not in order:
+            order["history"] = []
+        order["history"].append({
+            "action": "modified",
+            "timestamp": datetime.now().isoformat(),
+            "details": "; ".join(changes)
+        })
+        
+        # Save
+        self.orders["orders"][order_index] = order
+        self._save_orders()
+        
+        return True, "; ".join(changes), order
+
     
     def cancel_order(self, order_id: str) -> Tuple[bool, str, Optional[Dict]]:
         """Cancel an order and restore stock"""

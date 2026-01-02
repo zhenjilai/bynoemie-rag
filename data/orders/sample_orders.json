@@ -293,9 +293,10 @@
       "unit_price": 288.0,
       "total_price": 288.0,
       "currency": "MYR",
-      "status": "confirmed",
+      "status": "cancelled",
       "created_at": "2026-01-01T13:45:10.853222",
-      "estimated_delivery": "2026-01-06"
+      "estimated_delivery": "2026-01-06",
+      "cancelled_at": "2026-01-01T18:00:43.216918"
     },
     {
       "order_id": "ORD-44556",
@@ -308,16 +309,17 @@
       "unit_price": 288.0,
       "total_price": 288.0,
       "currency": "MYR",
-      "status": "confirmed",
+      "status": "cancelled",
       "created_at": "2026-01-01T13:57:22.599643",
-      "estimated_delivery": "2026-01-06"
+      "estimated_delivery": "2026-01-06",
+      "cancelled_at": "2026-01-01T18:00:43.221915"
     },
     {
       "order_id": "ORD-83369",
       "user_id": "USR-001",
       "product_id": "9773314081058",
       "product_name": "Tiara Satin Dress",
-      "size": "S",
+      "size": "M",
       "color": "white",
       "quantity": 1,
       "unit_price": 288.0,
@@ -325,7 +327,15 @@
       "currency": "MYR",
       "status": "confirmed",
       "created_at": "2026-01-01T15:53:15.243042",
-      "estimated_delivery": "2026-01-06"
+      "estimated_delivery": "2026-01-06",
+      "updated_at": "2026-01-01T21:13:06.533580",
+      "history": [
+        {
+          "action": "modified",
+          "timestamp": "2026-01-01T21:13:06.533580",
+          "details": "Size: S → M"
+        }
+      ]
     }
   ],
   "product_id_mapping": {
@@ -338,5 +348,5 @@
     "Ravalle Heels": 9762693218594,
     "Vera": 9769077768482
   },
-  "last_updated": "2026-01-01T15:53:15.243042"
+  "last_updated": "2026-01-01T21:13:06.533580"
 }

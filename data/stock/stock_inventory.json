@@ -411,7 +411,7 @@
   {
     "product_id": "9773314081058",
     "product_name": "Tiara Satin Dress",
-    "total_inventory": 7,
+    "total_inventory": 10,
     "variants": [
       {
         "size": "M",
@@ -423,7 +423,7 @@
       {
         "size": "S",
         "color": "White",
-        "quantity": 7,
+        "quantity": 10,
         "status": "in_stock",
         "sku": "9773314081058-S-WHI"
       }
