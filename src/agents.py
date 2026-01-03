@@ -72,6 +72,14 @@ class SharedState:
     
     def clear_pending_action(self):
         self.pending_action = None
+        
+    def extract_context(self) -> Dict:
+        """Extract useful context for LLM prompts"""
+        return {
+            "current_product": self.current_product,
+            "last_shown": [p.get('product_name') for p in self.last_shown_products[:3]],
+            "has_pending_action": self.pending_action is not None
+        }
 
 
 @dataclass
@@ -387,6 +395,110 @@ class InfoAgent:
         self.policy_rag = policy_rag
         self.product_lookup = {p['product_name'].lower(): p for p in products}
         print(f"📦 InfoAgent initialized with {len(products)} products, {len(stock_data)} stock entries")
+        
+        # Build category index from actual product_type field
+        self.category_index = self._build_category_index()
+        print(f"📦 InfoAgent initialized with {len(products)} products")
+        for cat, prods in self.category_index.items():
+            print(f"   Category '{cat}': {len(prods)} products")
+    
+    def _build_category_index(self) -> Dict[str, List[Dict]]:
+        """Build index based on product_type field"""
+        index = {}
+        for p in self.products:
+            ptype = p.get('product_type', '').lower()
+            if ptype not in index:
+                index[ptype] = []
+            index[ptype].append(p)
+        return index
+    
+    def _llm_detect_category(self, query: str, context: Dict) -> str:
+        """
+        Use LLM to detect what product category the user wants.
+        Returns: 'Heel', 'Bag', 'Dress', 'jumpsuits', or 'all'
+        """
+        if not self.client:
+            return self._fallback_detect_category(query)
+        
+        system_prompt = """You are a category classifier for a fashion store.
+
+    AVAILABLE CATEGORIES:
+    - Heel (includes: shoes, heels, footwear, sandals, pumps)
+    - Bag (includes: bags, purses, clutches, totes, handbags)
+    - Dress (includes: dresses, gowns, minis, maxis)
+    - jumpsuits (includes: jumpsuits, rompers, playsuits)
+    - all (for broad queries like "what to wear", "outfit ideas", "recommendations")
+
+    Analyze the user's query and return ONLY the category name.
+    If the query is about a specific product type, return that category.
+    If it's a broad/occasion query (wedding outfit, date night look), return "all".
+
+    Examples:
+    - "show me shoes" → Heel
+    - "any bags?" → Bag
+    - "what to wear for wedding" → all
+    - "recommend heels" → Heel
+    - "show me your footwear" → Heel
+    - "I need a dress" → Dress
+
+    Return ONLY the category name, nothing else."""
+
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": query}
+                ],
+                max_tokens=20,
+                temperature=0.1
+            )
+            category = response.choices[0].message.content.strip()
+            
+            # Normalize the response
+            category_map = {
+                'heel': 'Heel',
+                'heels': 'Heel',
+                'shoes': 'Heel',
+                'shoe': 'Heel',
+                'footwear': 'Heel',
+                'bag': 'Bag',
+                'bags': 'Bag',
+                'dress': 'Dress',
+                'dresses': 'Dress',
+                'jumpsuit': 'jumpsuits',
+                'jumpsuits': 'jumpsuits',
+                'all': 'all'
+            }
+            return category_map.get(category.lower(), category)
+        except Exception as e:
+            print(f"LLM category detection error: {e}")
+            return self._fallback_detect_category(query)
+
+
+    def _fallback_detect_category(self, query: str) -> str:
+        """Fallback rule-based category detection"""
+        q = query.lower()
+        
+        # Check for specific categories - EXPANDED to include more terms
+        if any(w in q for w in ['shoe', 'shoes', 'heel', 'heels', 'footwear', 'sandal', 'pump']):
+            return 'Heel'
+        if any(w in q for w in ['bag', 'bags', 'purse', 'clutch', 'tote', 'handbag']):
+            return 'Bag'
+        if any(w in q for w in ['jumpsuit', 'jumpsuits', 'romper', 'playsuit']):
+            return 'jumpsuits'
+        if any(w in q for w in ['dress', 'dresses', 'gown']):
+            return 'Dress'
+        if any(w in q for w in ['top', 'tops', 'blouse']):
+            return 'top'
+        if any(w in q for w in ['set', 'sets', 'coord']):
+            return 'set'
+        
+        # Broad queries
+        if any(w in q for w in ['wear', 'outfit', 'recommend', 'suggestion', 'what should']):
+            return 'all'
+        
+        return 'Dress'  # Default
     
     def handle(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
         """
@@ -691,70 +803,136 @@ Answer their specific question using the product information above.
             )
     
     def _handle_recommendation(self, query: str, state: SharedState, extracted: Dict) -> AgentResponse:
-        """Handle product recommendations with LLM personalization"""
-        occasion = extracted.get("occasion")
-        color = extracted.get("color")
+        """
+        Handle product recommendations with LLM-based category understanding.
+        Uses LLM to determine what category the user wants.
+        """
+        q = query.lower()
+        context = state.extract_context()
         
-        # Filter products based on extracted preferences
-        matching = self.products.copy()
+        # Use LLM to determine the category and intent
+        category = self._llm_detect_category(query, context)
         
-        # Apply filters if specified
-        if occasion:
-            matching = [p for p in matching if occasion.lower() in str(p.get('occasions', '')).lower() 
-                       or occasion.lower() in str(p.get('vibe_tags', '')).lower()] or matching
+        print(f"   🏷️ LLM detected category: {category}")
         
+        # Filter products by category
+        if category and category.lower() != 'all':
+            matching = [p for p in self.products if 
+                    category.lower() in p.get('product_type', '').lower() 
+                    or category.lower() in p.get('product_collection', '').lower()
+                    or category.lower() in p.get('product_name', '').lower()
+                    or category.lower() in p.get('subcategory', '').lower()]
+        else:
+            # Broad query - show variety
+            matching = self.products.copy()
+        
+        # If no matches found, fall back to all products
+        if not matching:
+            print(f"   ⚠️ No products found for category '{category}', showing all")
+            matching = self.products.copy()
+            category = 'item'  # Generic term for response
+        
+        # Filter by occasion if mentioned
+        occasion_text = ""
+        for occ, terms in [
+            ('gala', ['gala', 'formal', 'black tie']),
+            ('wedding', ['wedding', 'bridal']),
+            ('dinner', ['dinner', 'date night', 'date']),
+            ('party', ['party', 'cocktail', 'celebration']),
+            ('casual', ['casual', 'everyday', 'brunch']),
+            ('beach', ['beach', 'vacation', 'resort']),
+        ]:
+            if any(term in q for term in terms):
+                occasion_text = f" for your {occ}"
+                # Filter by occasion tags if available
+                occasion_filtered = [p for p in matching if 
+                    occ in str(p.get('occasions', '')).lower() or 
+                    occ in str(p.get('vibe_tags', '')).lower()]
+                if occasion_filtered:
+                    matching = occasion_filtered
+                break
+        
+        # Filter by color if mentioned
+        color = extracted.get('color')
         if color:
-            matching = [p for p in matching if color.lower() in p.get('colors_available', '').lower()] or matching
+            color_filtered = [p for p in matching if color.lower() in p.get('colors_available', '').lower()]
+            if color_filtered:
+                matching = color_filtered
         
-        # Randomize for variety
+        # Randomize for variety and limit
         random.shuffle(matching)
         matching = matching[:10]
         
+        # Update state
         state.last_shown_products = matching
+        if matching:
+            state.set_current_product(matching[0])
         
-        # Build product list for LLM
+        # Generate response using LLM
         product_list = "\n".join([
-            f"- {p['product_name']}: MYR {p.get('price_min', 0)}, Colors: {p.get('colors_available', 'N/A')}"
+            f"- {p['product_name']}: MYR {p.get('price_min', 0)}, Colors: {p.get('colors_available', 'Various')}"
             for p in matching[:5]
         ])
         
-        system_prompt = f"""You are ByNoemie's fashion stylist assistant.
+        # Determine category name for response
+        category_display = {
+            'heel': 'shoes',
+            'bag': 'bags', 
+            'dress': 'dresses',
+            'jumpsuit': 'jumpsuits',
+            'jumpsuits': 'jumpsuits',
+            'top': 'tops',
+            'set': 'sets',
+            'all': 'pieces',
+            'item': 'pieces'
+        }.get(category.lower() if category else 'item', 'pieces')
+        
+        if self.client:
+            system_prompt = f"""You are ByNoemie's fashion stylist assistant.
 
-CONVERSATION CONTEXT:
-{state.get_conversation_summary(3)}
+    USER REQUEST: {query}
+    CATEGORY DETECTED: {category_display}
+    OCCASION: {occasion_text or 'not specified'}
 
-AVAILABLE PRODUCTS TO RECOMMEND:
-{product_list}
+    PRODUCTS TO RECOMMEND:
+    {product_list}
 
-USER REQUEST: {query}
+    Create a personalized recommendation response:
+    - If they asked for a specific category (shoes, bags, dresses), confirm you're showing {category_display}
+    - Mention 2-3 specific products by name with their prices
+    - Be enthusiastic but concise (2-3 sentences)
+    - Use 1-2 emojis
+    - Don't say "I don't have" unless the product list is empty"""
 
-Create a personalized recommendation response:
-- Reference any mentioned preferences (occasion, style, etc.)
-- Mention 2-3 specific products by name
-- Be enthusiastic but not over-the-top
-- Keep it to 2-3 sentences
-- Use 1-2 relevant emojis"""
-
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": query}
-                ],
-                max_tokens=150,
-                temperature=0.8
-            )
-            return AgentResponse(
-                message=response.choices[0].message.content,
-                products_to_show=matching
-            )
-        except:
+            try:
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": query}
+                    ],
+                    max_tokens=150,
+                    temperature=0.7
+                )
+                return AgentResponse(
+                    message=response.choices[0].message.content,
+                    products_to_show=matching
+                )
+            except Exception as e:
+                print(f"LLM recommendation error: {e}")
+        
+        # Fallback response
+        if matching:
             product_names = ", ".join([p['product_name'] for p in matching[:3]])
             return AgentResponse(
-                message=f"Here are some beautiful pieces for you! Check out the {product_names}. 💕",
+                message=f"Here are some beautiful {category_display}{occasion_text}! Check out the {product_names}. 💕",
                 products_to_show=matching
             )
+        
+        return AgentResponse(
+            message=f"Let me show you our latest {category_display}!",
+            products_to_show=self.products[:10]
+        )
     
     def _get_stock_info(self, product: Dict) -> str:
         """Get formatted stock information for a product"""
