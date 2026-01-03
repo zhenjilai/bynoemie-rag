@@ -1,5 +1,5 @@
 # ByNoemie RAG Chatbot - Production Dockerfile
-# Fixed for flat project structure
+# Matches GitHub repo structure with subdirectories
 
 FROM python:3.11-slim
 
@@ -18,39 +18,21 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Create directory structure
-RUN mkdir -p src static data/products data/stock data/orders data/embeddings data/policies data/cache
+# Copy the entire project structure
+# Your repo has: config/, data/, docs/, examples/, scripts/, src/, static/
+COPY . .
 
-# Copy all source files explicitly (no wildcards for optional files)
-# Copy Python files (required)
-COPY *.py ./
-
-# Copy JSON files (required for data)
-COPY *.json ./
-
-# Copy HTML file
-COPY index.html ./
-COPY index.html static/
-
-# Setup src/ directory for imports (api.py imports from src.agents)
-RUN for f in agents.py orders.py policy_rag.py database.py data_manager.py \
-    cache.py logger.py utils.py base.py openai_client.py groq_client.py \
-    templates.py rules.py workflow.py chainer.py error_handler.py \
-    rate_limiter.py token_counter.py few_shot.py data_processor.py scraper.py; do \
-    if [ -f "$f" ]; then cp "$f" src/; fi; \
-    done && \
-    touch src/__init__.py
-
-# Setup data directories with JSON files
-RUN if [ -f "bynoemie_products.json" ]; then cp bynoemie_products.json data/products/; fi && \
-    if [ -f "stock_inventory.json" ]; then cp stock_inventory.json data/stock/; fi && \
-    if [ -f "sample_orders.json" ]; then cp sample_orders.json data/orders/; fi && \
-    if [ -f "policies.json" ]; then cp policies.json data/policies/; fi
+# Ensure static folder exists and has index.html
+RUN mkdir -p static && \
+    if [ -f "index.html" ] && [ ! -f "static/index.html" ]; then \
+        cp index.html static/; \
+    fi
 
 # Debug: Show what was copied
-RUN echo "=== Files in /app ===" && ls -la && \
-    echo "=== Files in /app/src ===" && ls -la src/ && \
-    echo "=== Files in /app/static ===" && ls -la static/
+RUN echo "=== Root files ===" && ls -la && \
+    echo "=== src/ folder ===" && ls -la src/ 2>/dev/null || echo "no src folder" && \
+    echo "=== static/ folder ===" && ls -la static/ 2>/dev/null || echo "no static folder" && \
+    echo "=== data/ folder ===" && ls -la data/ 2>/dev/null || echo "no data folder"
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
