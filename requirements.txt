@@ -109,3 +109,4 @@ sse-starlette>=2.0.0       # Server-sent events
 # Additional dependencies
 beautifulsoup4>=4.12.0
 requests>=2.31.0
+python-multipart>=0.0.9    # Required for file upload (Whisper STT)
