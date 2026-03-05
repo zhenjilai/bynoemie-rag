@@ -63,7 +63,7 @@
         .mic-btn.processing { background: #D4A574; color: #0D0F12; border-color: #D4A574; }
         @keyframes pulse-mic { 0%, 100% { box-shadow: 0 0 0 0 rgba(231,76,60,0.4); } 50% { box-shadow: 0 0 0 10px rgba(231,76,60,0); } }
         .voice-controls { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; }
-        .voice-toggle-btn { display: flex; align-items: center; gap: 6px; background: #1C1F26; border: 1px solid #2A2F3A; border-radius: 20px; padding: 6px 14px; color: #888; font-family: 'Montserrat', sans-serif; font-size: 12px; cursor: pointer; transition: all 0.3s ease; }
+        .voice-toggle-btn { display: flex; align-items: center; gap: 6px; background: #2A2F3A; border: 1px solid #D4A574; border-radius: 20px; padding: 6px 14px; color: #D4A574; font-family: 'Montserrat', sans-serif; font-size: 12px; cursor: pointer; transition: all 0.3s ease; }
         .voice-toggle-btn:hover { border-color: #D4A574; color: #D4A574; }
         .voice-toggle-btn.active { background: #2A2F3A; border-color: #D4A574; color: #D4A574; }
         .voice-select { background: #1C1F26; border: 1px solid #2A2F3A; border-radius: 20px; padding: 6px 12px; color: #888; font-family: 'Montserrat', sans-serif; font-size: 12px; cursor: pointer; outline: none; }
@@ -80,9 +80,9 @@
         <h1 class="logo">✨ ByNoemie ✨</h1>
         <p class="tagline">Your Personal Fashion Assistant</p>
         <div class="voice-controls">
-            <button class="voice-toggle-btn" id="ttsToggle" onclick="toggleTTS()" title="Auto-read chatbot replies aloud">
+            <button class="voice-toggle-btn active" id="ttsToggle" onclick="toggleTTS()" title="Auto-read chatbot replies aloud">
                 <span class="toggle-icon">🔊</span>
-                <span id="ttsLabel">AI Voice: OFF</span>
+                <span id="ttsLabel">AI Voice: ON</span>
             </button>
             <select class="voice-select" id="voiceSelect" title="Select TTS voice">
                 <option value="alloy">Alloy</option>
@@ -118,6 +118,31 @@
         const sendBtn = document.getElementById('sendBtn');
         let conversationHistory = [];
 
+        // ============================================================
+        // TTS pre-fetch cache: start fetching audio BEFORE message renders
+        // This eliminates the latency the user would feel
+        // ============================================================
+        let ttsPrefetchCache = null; // { promise, text }
+
+        function prefetchTTS(text) {
+            const clean = cleanTextForTTSRaw(text);
+            if (!clean) return;
+            const params = new URLSearchParams({ text: clean, voice: voiceSelect.value });
+            const promise = fetch('/api/tts?' + params, { method: 'POST' })
+                .then(res => {
+                    if (!res.ok) throw new Error('TTS prefetch failed');
+                    return res.blob();
+                })
+                .then(blob => URL.createObjectURL(blob))
+                .catch(err => { console.error('TTS prefetch error:', err); return null; });
+            ttsPrefetchCache = { promise, text: clean };
+        }
+
+        // Clean text without needing a DOM element (for prefetch before render)
+        function cleanTextForTTSRaw(text) {
+            return text.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+        }
+
         function addMessage(content, role, products = []) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
@@ -137,7 +162,11 @@
                 feedbackDiv.className = 'feedback-buttons';
                 feedbackDiv.innerHTML = `<button class="feedback-btn" onclick="sendFeedback('positive')">👍</button><button class="feedback-btn" onclick="sendFeedback('negative')">👎</button><button class="feedback-btn" onclick="sendFeedback('neutral')">😐</button><button class="msg-speak-btn" onclick="speakMessage(this)" title="Read aloud (OpenAI TTS)">🔈</button>`;
                 contentDiv.appendChild(feedbackDiv);
-                if (ttsEnabled && content) { playTTS(content); }
+
+                // Auto-play TTS using prefetched audio (no extra latency)
+                if (ttsEnabled && content) {
+                    playPrefetchedOrFreshTTS(content);
+                }
             }
             messagesContainer.appendChild(messageDiv);
             if (products && products.length > 0) {
@@ -188,6 +217,14 @@
                 });
                 if (!response.ok) throw new Error('Network error');
                 const data = await response.json();
+
+                // === KEY LATENCY FIX ===
+                // Start TTS fetch IMMEDIATELY when we get the text,
+                // BEFORE rendering the message to DOM
+                if (ttsEnabled && data.message) {
+                    prefetchTTS(data.message);
+                }
+
                 hideTypingIndicator();
                 addMessage(data.message, 'assistant', data.products);
                 conversationHistory.push({ role: 'assistant', content: data.message });
@@ -254,15 +291,24 @@
         /* ============================================================
            VOICE OUTPUT — OpenAI TTS-1 via /api/tts
            ============================================================ */
-        let ttsEnabled = false, currentAudio = null;
+        let ttsEnabled = true;  // <<< ON by default
+        let currentAudio = null;
         const ttsToggle = document.getElementById('ttsToggle');
         const ttsLabel = document.getElementById('ttsLabel');
         const voiceSelect = document.getElementById('voiceSelect');
 
         function toggleTTS() {
             ttsEnabled = !ttsEnabled;
-            if (ttsEnabled) { ttsToggle.classList.add('active'); ttsLabel.textContent = 'AI Voice: ON'; ttsToggle.querySelector('.toggle-icon').textContent = '🔊'; }
-            else { ttsToggle.classList.remove('active'); ttsLabel.textContent = 'AI Voice: OFF'; ttsToggle.querySelector('.toggle-icon').textContent = '🔇'; stopCurrentAudio(); }
+            if (ttsEnabled) {
+                ttsToggle.classList.add('active');
+                ttsLabel.textContent = 'AI Voice: ON';
+                ttsToggle.querySelector('.toggle-icon').textContent = '🔊';
+            } else {
+                ttsToggle.classList.remove('active');
+                ttsLabel.textContent = 'AI Voice: OFF';
+                ttsToggle.querySelector('.toggle-icon').textContent = '🔇';
+                stopCurrentAudio();
+            }
         }
 
         function stopCurrentAudio() {
@@ -273,9 +319,51 @@
         function cleanTextForTTS(html) {
             const t = document.createElement('div'); t.innerHTML = html;
             t.querySelectorAll('.feedback-buttons').forEach(f=>f.remove());
-            return (t.textContent||t.innerText||'').replace(/\\s+/g,' ').trim();
+            return (t.textContent||t.innerText||'').replace(/\s+/g,' ').trim();
         }
 
+        /**
+         * Play TTS using prefetched audio if available, otherwise fetch fresh.
+         * This is the key to eliminating latency — the audio is already
+         * downloading while the message is being rendered.
+         */
+        async function playPrefetchedOrFreshTTS(html) {
+            stopCurrentAudio();
+            const text = cleanTextForTTSRaw(html);
+            if (!text) return;
+
+            try {
+                let audioUrl = null;
+
+                // Check if we have a prefetched audio that matches this text
+                if (ttsPrefetchCache && ttsPrefetchCache.text === text) {
+                    // Use the prefetched audio — already downloading or ready
+                    audioUrl = await ttsPrefetchCache.promise;
+                    ttsPrefetchCache = null;
+                }
+
+                // Fallback: fetch fresh if prefetch missed or failed
+                if (!audioUrl) {
+                    const params = new URLSearchParams({ text, voice: voiceSelect.value });
+                    const res = await fetch('/api/tts?' + params, { method: 'POST' });
+                    if (!res.ok) throw new Error('TTS failed');
+                    const blob = await res.blob();
+                    audioUrl = URL.createObjectURL(blob);
+                }
+
+                const audio = new Audio(audioUrl);
+                currentAudio = audio;
+                audio.onended = () => { currentAudio = null; URL.revokeObjectURL(audioUrl); };
+                audio.onerror = () => { currentAudio = null; URL.revokeObjectURL(audioUrl); };
+                await audio.play();
+            } catch (err) {
+                console.error('TTS playback error:', err);
+            }
+        }
+
+        /**
+         * Play TTS fresh (for per-message speaker button clicks)
+         */
         async function playTTS(html, btnEl=null) {
             stopCurrentAudio();
             const text = cleanTextForTTS(html);
