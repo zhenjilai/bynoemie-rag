@@ -21,11 +21,11 @@ langchain-openai>=0.2.0
 openai>=1.50.0
 
 # Anthropic
-langchain-anthropic>=0.2.0
-anthropic>=0.36.0
+# langchain-anthropic>=0.2.0
+# anthropic>=0.36.0
 
 # Ollama (local, free)
-langchain-ollama>=0.2.0
+# langchain-ollama>=0.2.0
 
 # =============================================================================
 # EMBEDDINGS & VECTOR STORES
@@ -33,7 +33,7 @@ langchain-ollama>=0.2.0
 sentence-transformers>=3.0.0
 langchain-huggingface>=0.1.0
 chromadb>=0.5.0
-faiss-cpu>=1.8.0
+# faiss-cpu>=1.8.0
 
 # =============================================================================
 # DATA PROCESSING
@@ -71,7 +71,7 @@ pydantic>=2.0.0          # Data validation
 # =============================================================================
 # WEB UI
 # =============================================================================
-streamlit>=1.40.0
+# streamlit>=1.40.0
 
 # =============================================================================
 # LOGGING & MONITORING
@@ -82,22 +82,22 @@ structlog>=24.0.0
 # =============================================================================
 # DEVELOPMENT & TESTING
 # =============================================================================
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
-pytest-cov>=5.0.0
-black>=24.0.0
-ruff>=0.5.0
-mypy>=1.10.0
-ipython>=8.0.0
-jupyter>=1.0.0
+# pytest>=8.0.0
+# pytest-asyncio>=0.23.0
+# pytest-cov>=5.0.0
+# black>=24.0.0
+# ruff>=0.5.0
+# mypy>=1.10.0
+# ipython>=8.0.0
+# jupyter>=1.0.0
 
 # =============================================================================
 # OPTIONAL: WEB SERVER
 # =============================================================================
 fastapi>=0.110.0
 uvicorn[standard]>=0.30.0
-gunicorn>=21.0.0           # Production WSGI server
-sse-starlette>=2.0.0       # Server-sent events
+# gunicorn>=21.0.0           # Production WSGI server
+# sse-starlette>=2.0.0       # Server-sent events
 
 # =============================================================================
 # OPTIONAL: ADVANCED FEATURES
@@ -108,5 +108,4 @@ sse-starlette>=2.0.0       # Server-sent events
 
 # Additional dependencies
 beautifulsoup4>=4.12.0
-requests>=2.31.0
 python-multipart>=0.0.9    # Required for file upload (Whisper STT)
