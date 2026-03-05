@@ -1,12 +1,16 @@
 """
 ByNoemie RAG Chatbot - FastAPI Backend
+With Whisper Large-v3 STT + OpenAI TTS voice features
 """
 import os
+import io
+import re
 import json
+import tempfile
 from typing import Dict, List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pathlib import Path
@@ -21,14 +25,14 @@ app = FastAPI(title="ByNoemie Fashion Assistant", version="2.0")
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://bynoemie-chatbot-production.up.railway.app", "https://bynoemie.com.my"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # =============================================================================
-# DATA LOADING
+# DATA LOADING (UNCHANGED)
 # =============================================================================
 def load_products():
     products_path = Path("data/products/bynoemie_products.json")
@@ -43,7 +47,6 @@ def load_stock():
     if stock_path.exists():
         with open(stock_path, 'r') as f:
             stock_list = json.load(f)
-            # Convert list to dict keyed by product_name (lowercase)
             if isinstance(stock_list, list):
                 return {item['product_name'].lower(): item for item in stock_list}
             return stock_list
@@ -53,7 +56,6 @@ def reload_stock():
     """Reload stock data from disk - call after order changes"""
     global stock_data
     stock_data = load_stock()
-    # Also update agents' stock_data if orchestrator exists
     if orchestrator:
         orchestrator.info_agent.stock_data = stock_data
         orchestrator.action_agent.stock_data = stock_data
@@ -66,7 +68,6 @@ def load_images():
     if products_path.exists():
         with open(products_path, 'r') as f:
             products = json.load(f)
-            # Build image lookup by product_handle
             images = {}
             for p in products:
                 handle = p.get('product_handle', '')
@@ -87,28 +88,26 @@ products = load_products()
 stock_data = load_stock()
 images_data = load_images()
 
-# Debug: Print what we loaded
 print(f"📦 Loaded {len(products)} products")
 print(f"📊 Loaded {len(stock_data)} stock entries")
 print(f"🖼️ Loaded {len(images_data)} image entries")
 
-# Debug: Check if Coco Dress is in stock_data
 if 'coco dress' in stock_data:
     print(f"✅ Coco Dress stock found: {stock_data['coco dress'].get('total_inventory')} units")
 else:
     print(f"❌ Coco Dress NOT found in stock_data. Keys: {list(stock_data.keys())[:5]}")
 
 # =============================================================================
-# ORCHESTRATOR
+# ORCHESTRATOR (UNCHANGED — shared OpenAI client reused for Whisper + TTS)
 # =============================================================================
 orchestrator = None
+openai_client_global = None
 
 def init_orchestrator():
-    global orchestrator
+    global orchestrator, openai_client_global
     try:
         from openai import OpenAI
         
-        # Try to load .env file
         try:
             from dotenv import load_dotenv
             load_dotenv()
@@ -121,7 +120,7 @@ def init_orchestrator():
             print("   Set it in .env file or as environment variable")
             return
         
-        openai_client = OpenAI(api_key=api_key)
+        openai_client_global = OpenAI(api_key=api_key)
         order_manager = OrderManager()
         
         class SimpleUserManager:
@@ -133,7 +132,7 @@ def init_orchestrator():
                 return "Standard return policy: 14 days for unworn items."
         
         orchestrator = ChatbotOrchestrator(
-            openai_client=openai_client,
+            openai_client=openai_client_global,
             products=products,
             stock_data=stock_data,
             order_manager=order_manager,
@@ -141,6 +140,8 @@ def init_orchestrator():
             policy_rag=SimplePolicyRAG()
         )
         print("✅ Orchestrator initialized")
+        print("🎤 Whisper Large-v3 STT ready (via OpenAI API)")
+        print("🔊 OpenAI TTS-1 ready")
     except Exception as e:
         print(f"❌ Orchestrator error: {e}")
 
@@ -149,7 +150,7 @@ async def startup():
     init_orchestrator()
 
 # =============================================================================
-# MODELS
+# MODELS (UNCHANGED)
 # =============================================================================
 class ChatRequest(BaseModel):
     message: str
@@ -161,7 +162,107 @@ class ChatResponse(BaseModel):
     products: List[Dict] = []
 
 # =============================================================================
-# ENDPOINTS
+# VOICE ENDPOINTS (NEW — Whisper STT + OpenAI TTS)
+# =============================================================================
+
+@app.post("/api/transcribe")
+async def transcribe_audio(audio: UploadFile = File(...)):
+    """
+    Transcribe audio using OpenAI Whisper Large-v3.
+    Accepts audio file (webm, wav, mp3, m4a, ogg, flac, mp4).
+    Auto-detects language. Returns transcribed text.
+    """
+    if not openai_client_global:
+        raise HTTPException(status_code=500, detail="OpenAI client not initialized")
+    
+    try:
+        audio_bytes = await audio.read()
+        
+        if len(audio_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+        
+        # Determine filename extension
+        filename = audio.filename or "audio.webm"
+        valid_exts = ['.webm', '.wav', '.mp3', '.m4a', '.ogg', '.flac', '.mp4']
+        if not any(filename.endswith(ext) for ext in valid_exts):
+            filename = "audio.webm"
+        
+        # Create file-like object for OpenAI API
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = filename
+        
+        # Call Whisper via OpenAI API
+        # "whisper-1" maps to Whisper Large-v3 on OpenAI's servers
+        transcript = openai_client_global.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            response_format="json"
+        )
+        
+        transcribed_text = transcript.text.strip()
+        print(f"🎤 Whisper transcribed: '{transcribed_text}'")
+        
+        return {"text": transcribed_text, "status": "success"}
+    
+    except Exception as e:
+        print(f"❌ Transcription error: {e}")
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+
+@app.post("/api/tts")
+async def text_to_speech(
+    text: str = Query(..., description="Text to convert to speech"),
+    voice: str = Query(default="nova", description="Voice: alloy, echo, fable, onyx, nova, shimmer")
+):
+    """
+    Convert text to speech using OpenAI TTS-1.
+    Returns audio as MP3 stream.
+    Supports any language — the model auto-detects.
+    """
+    if not openai_client_global:
+        raise HTTPException(status_code=500, detail="OpenAI client not initialized")
+    
+    try:
+        # Strip HTML tags
+        clean_text = re.sub(r'<[^>]+>', '', text)
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        
+        if not clean_text:
+            raise HTTPException(status_code=400, detail="Empty text")
+        
+        # TTS-1 has ~4096 char limit per request
+        if len(clean_text) > 4096:
+            clean_text = clean_text[:4096]
+        
+        # Validate voice
+        valid_voices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']
+        if voice not in valid_voices:
+            voice = 'nova'
+        
+        # Call OpenAI TTS
+        response = openai_client_global.audio.speech.create(
+            model="tts-1",
+            voice=voice,
+            input=clean_text,
+            response_format="mp3"
+        )
+        
+        audio_bytes = response.content
+        print(f"🔊 TTS generated: {len(audio_bytes)} bytes, voice={voice}")
+        
+        return StreamingResponse(
+            io.BytesIO(audio_bytes),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "inline; filename=speech.mp3"}
+        )
+    
+    except Exception as e:
+        print(f"❌ TTS error: {e}")
+        raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
+
+
+# =============================================================================
+# ENDPOINTS (UNCHANGED)
 # =============================================================================
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -169,11 +270,10 @@ async def root():
     if index_path.exists():
         return FileResponse("static/index.html")
     else:
-        # Return inline HTML if file not found
         return HTMLResponse(content=get_inline_html(), status_code=200)
 
 def get_inline_html():
-    """Return the full HTML inline as fallback"""
+    """Return full HTML inline as fallback — with Whisper STT + OpenAI TTS"""
     return '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -215,7 +315,7 @@ def get_inline_html():
         .pill.stock-out { background: #3A2A2A; color: #888; }
         .pill.tag { background: #2A2F3A; color: #C7C7FF; }
         .input-area { padding: 20px; background: #1C1F26; border-top: 1px solid #2A2F3A; }
-        .input-wrapper { max-width: 1200px; margin: 0 auto; display: flex; gap: 12px; }
+        .input-wrapper { max-width: 1200px; margin: 0 auto; display: flex; gap: 12px; align-items: center; }
         .chat-input { flex: 1; background: #0D0F12; border: 1px solid #2A2F3A; border-radius: 12px; padding: 14px 18px; color: #FFFFFF; font-family: 'Montserrat', sans-serif; font-size: 14px; outline: none; transition: border-color 0.3s ease; }
         .chat-input:focus { border-color: #D4A574; }
         .chat-input::placeholder { color: #666; }
@@ -233,12 +333,42 @@ def get_inline_html():
         .feedback-buttons { display: flex; gap: 8px; margin-top: 10px; }
         .feedback-btn { background: transparent; border: 1px solid #2A2F3A; border-radius: 8px; padding: 6px 12px; cursor: pointer; transition: all 0.2s ease; font-size: 16px; }
         .feedback-btn:hover { background: #2A2F3A; }
+        .mic-btn { background: #2A2F3A; border: 1px solid #3A3F4A; border-radius: 12px; padding: 14px 16px; color: #D4A574; font-size: 18px; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; }
+        .mic-btn:hover { background: #3A3F4A; border-color: #D4A574; }
+        .mic-btn.recording { background: #e74c3c; color: #FFF; border-color: #e74c3c; animation: pulse-mic 1.5s infinite; }
+        .mic-btn.processing { background: #D4A574; color: #0D0F12; border-color: #D4A574; }
+        @keyframes pulse-mic { 0%, 100% { box-shadow: 0 0 0 0 rgba(231,76,60,0.4); } 50% { box-shadow: 0 0 0 10px rgba(231,76,60,0); } }
+        .voice-controls { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; }
+        .voice-toggle-btn { display: flex; align-items: center; gap: 6px; background: #1C1F26; border: 1px solid #2A2F3A; border-radius: 20px; padding: 6px 14px; color: #888; font-family: 'Montserrat', sans-serif; font-size: 12px; cursor: pointer; transition: all 0.3s ease; }
+        .voice-toggle-btn:hover { border-color: #D4A574; color: #D4A574; }
+        .voice-toggle-btn.active { background: #2A2F3A; border-color: #D4A574; color: #D4A574; }
+        .voice-select { background: #1C1F26; border: 1px solid #2A2F3A; border-radius: 20px; padding: 6px 12px; color: #888; font-family: 'Montserrat', sans-serif; font-size: 12px; cursor: pointer; outline: none; }
+        .voice-select:focus { border-color: #D4A574; color: #D4A574; }
+        .msg-speak-btn { background: transparent; border: 1px solid #2A2F3A; border-radius: 8px; padding: 6px 12px; cursor: pointer; transition: all 0.2s ease; font-size: 16px; }
+        .msg-speak-btn:hover { background: #2A2F3A; }
+        .msg-speak-btn.playing { color: #D4A574; border-color: #D4A574; }
+        .voice-status { text-align: center; color: #D4A574; font-size: 12px; padding: 4px 0; min-height: 20px; }
+        @media (max-width: 768px) { .logo { font-size: 2em; } .message-content { max-width: 90%; } .product-carousel { height: 340px; } .product-card { width: 160px; height: 300px; } .product-image-wrapper { width: 136px; height: 180px; } }
     </style>
 </head>
 <body>
     <header class="header">
         <h1 class="logo">✨ ByNoemie ✨</h1>
         <p class="tagline">Your Personal Fashion Assistant</p>
+        <div class="voice-controls">
+            <button class="voice-toggle-btn" id="ttsToggle" onclick="toggleTTS()" title="Auto-read chatbot replies aloud">
+                <span class="toggle-icon">🔊</span>
+                <span id="ttsLabel">AI Voice: OFF</span>
+            </button>
+            <select class="voice-select" id="voiceSelect" title="Select TTS voice">
+                <option value="alloy">Alloy</option>
+                <option value="nova" selected>Nova</option>
+                <option value="shimmer">Shimmer</option>
+                <option value="echo">Echo</option>
+                <option value="fable">Fable</option>
+                <option value="onyx">Onyx</option>
+            </select>
+        </div>
     </header>
     <div class="chat-container">
         <div class="quick-actions">
@@ -250,9 +380,11 @@ def get_inline_html():
         </div>
         <div class="messages" id="messages"></div>
     </div>
+    <div class="voice-status" id="voiceStatus"></div>
     <div class="input-area">
         <div class="input-wrapper">
-            <input type="text" class="chat-input" id="chatInput" placeholder="How may I assist you?" onkeypress="handleKeyPress(event)">
+            <input type="text" class="chat-input" id="chatInput" placeholder="Type or press mic to speak..." onkeypress="handleKeyPress(event)">
+            <button class="mic-btn" id="micBtn" onclick="toggleRecording()" title="Click to record — powered by Whisper AI">🎤</button>
             <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
         </div>
     </div>
@@ -279,63 +411,42 @@ def get_inline_html():
                 messageDiv.appendChild(contentDiv);
                 const feedbackDiv = document.createElement('div');
                 feedbackDiv.className = 'feedback-buttons';
-                feedbackDiv.innerHTML = '<button class="feedback-btn" onclick="sendFeedback(\'positive\')">👍</button><button class="feedback-btn" onclick="sendFeedback(\'negative\')">👎</button><button class="feedback-btn" onclick="sendFeedback(\'neutral\')">😐</button>';
+                feedbackDiv.innerHTML = `<button class="feedback-btn" onclick="sendFeedback('positive')">👍</button><button class="feedback-btn" onclick="sendFeedback('negative')">👎</button><button class="feedback-btn" onclick="sendFeedback('neutral')">😐</button><button class="msg-speak-btn" onclick="speakMessage(this)" title="Read aloud (OpenAI TTS)">🔈</button>`;
                 contentDiv.appendChild(feedbackDiv);
+                if (ttsEnabled && content) { playTTS(content); }
             }
             messagesContainer.appendChild(messageDiv);
             if (products && products.length > 0) {
-                const carouselDiv = createProductCarousel(products);
-                messagesContainer.appendChild(carouselDiv);
+                messagesContainer.appendChild(createProductCarousel(products));
             }
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
         function createProductCarousel(products) {
-            const carouselDiv = document.createElement('div');
-            carouselDiv.className = 'product-carousel';
-            products.forEach(product => {
-                const card = document.createElement('a');
-                card.className = 'product-card';
-                card.href = product.product_url;
-                card.target = '_blank';
-                let stockPill = '';
-                if (product.stock_status === 'In Stock') {
-                    if (product.total_inventory > 0 && product.total_inventory <= 5) {
-                        stockPill = `<span class="pill stock-low">Only ${product.total_inventory} left</span>`;
-                    } else {
-                        stockPill = '<span class="pill stock-in">In Stock</span>';
-                    }
-                } else {
-                    stockPill = '<span class="pill stock-out">Out of Stock</span>';
-                }
-                const tagPills = (product.tags || []).map(tag => `<span class="pill tag">${tag}</span>`).join('');
-                card.innerHTML = `
-                    <div class="product-image-wrapper">
-                        <img src="${product.image_url}" alt="${product.product_name}" class="product-image" onerror="this.style.display='none'">
-                    </div>
-                    <div class="product-name">${product.product_name}</div>
-                    <div class="product-price">MYR ${product.price}</div>
-                    ${product.category ? `<div class="product-category">${product.category}</div>` : ''}
-                    <div class="product-pills">${stockPill}${tagPills}</div>
-                `;
-                carouselDiv.appendChild(card);
+            const d = document.createElement('div');
+            d.className = 'product-carousel';
+            products.forEach(p => {
+                const c = document.createElement('a');
+                c.className = 'product-card'; c.href = p.product_url; c.target = '_blank';
+                let sp = '';
+                if (p.stock_status === 'In Stock') {
+                    sp = (p.total_inventory > 0 && p.total_inventory <= 5) ? `<span class="pill stock-low">Only ${p.total_inventory} left</span>` : '<span class="pill stock-in">In Stock</span>';
+                } else { sp = '<span class="pill stock-out">Out of Stock</span>'; }
+                const tp = (p.tags||[]).map(t=>`<span class="pill tag">${t}</span>`).join('');
+                c.innerHTML = `<div class="product-image-wrapper"><img src="${p.image_url}" alt="${p.product_name}" class="product-image" onerror="this.style.display='none'"></div><div class="product-name">${p.product_name}</div><div class="product-price">MYR ${p.price}</div>${p.category?`<div class="product-category">${p.category}</div>`:''}<div class="product-pills">${sp}${tp}</div>`;
+                d.appendChild(c);
             });
-            return carouselDiv;
+            return d;
         }
 
         function showTypingIndicator() {
-            const typingDiv = document.createElement('div');
-            typingDiv.className = 'message assistant';
-            typingDiv.id = 'typing-indicator';
-            typingDiv.innerHTML = '<div class="avatar">🛍️</div><div class="message-content"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div>';
-            messagesContainer.appendChild(typingDiv);
+            const t = document.createElement('div');
+            t.className = 'message assistant'; t.id = 'typing-indicator';
+            t.innerHTML = '<div class="avatar">🛍️</div><div class="message-content"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div>';
+            messagesContainer.appendChild(t);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
-
-        function hideTypingIndicator() {
-            const indicator = document.getElementById('typing-indicator');
-            if (indicator) indicator.remove();
-        }
+        function hideTypingIndicator() { const i = document.getElementById('typing-indicator'); if (i) i.remove(); }
 
         async function sendMessage(customMessage = null) {
             const message = customMessage || chatInput.value.trim();
@@ -343,14 +454,13 @@ def get_inline_html():
             chatInput.value = '';
             addMessage(message, 'user');
             conversationHistory.push({ role: 'user', content: message });
-            sendBtn.disabled = true;
-            chatInput.disabled = true;
+            sendBtn.disabled = true; chatInput.disabled = true;
             showTypingIndicator();
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: message, conversation_history: conversationHistory })
+                    body: JSON.stringify({ message, conversation_history: conversationHistory })
                 });
                 if (!response.ok) throw new Error('Network error');
                 const data = await response.json();
@@ -362,14 +472,111 @@ def get_inline_html():
                 addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
                 console.error('Error:', error);
             } finally {
-                sendBtn.disabled = false;
-                chatInput.disabled = false;
-                chatInput.focus();
+                sendBtn.disabled = false; chatInput.disabled = false; chatInput.focus();
             }
         }
 
-        function handleKeyPress(event) { if (event.key === 'Enter') sendMessage(); }
+        function handleKeyPress(e) { if (e.key === 'Enter') sendMessage(); }
         function sendFeedback(type) { console.log('Feedback:', type); }
+
+        /* ============================================================
+           VOICE INPUT — Record audio → Whisper Large-v3 via /api/transcribe
+           ============================================================ */
+        let mediaRecorder = null, audioChunks = [], isRecording = false;
+        const micBtn = document.getElementById('micBtn');
+        const voiceStatus = document.getElementById('voiceStatus');
+
+        async function toggleRecording() {
+            if (isRecording) { stopRecording(); } else { await startRecording(); }
+        }
+
+        async function startRecording() {
+            try {
+                stopCurrentAudio();
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
+                    : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
+                mediaRecorder = new MediaRecorder(stream, { mimeType });
+                audioChunks = [];
+                mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+                mediaRecorder.onstop = async () => {
+                    stream.getTracks().forEach(t => t.stop());
+                    if (audioChunks.length === 0) { voiceStatus.textContent = 'No audio captured.'; setTimeout(()=>voiceStatus.textContent='',3000); return; }
+                    micBtn.classList.remove('recording'); micBtn.classList.add('processing'); micBtn.textContent = '⏳';
+                    voiceStatus.textContent = '🧠 Transcribing with Whisper AI...';
+                    try {
+                        const blob = new Blob(audioChunks, { type: mimeType });
+                        const ext = mimeType.includes('webm') ? 'webm' : 'mp4';
+                        const fd = new FormData(); fd.append('audio', blob, `recording.${ext}`);
+                        const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
+                        if (!res.ok) { const err = await res.json().catch(()=>({})); throw new Error(err.detail || 'Transcription failed'); }
+                        const data = await res.json();
+                        if (data.text && data.text.trim()) { voiceStatus.textContent = ''; sendMessage(data.text.trim()); }
+                        else { voiceStatus.textContent = 'Could not understand. Try again.'; setTimeout(()=>voiceStatus.textContent='',3000); }
+                    } catch (err) { console.error(err); voiceStatus.textContent = 'Error: '+err.message; setTimeout(()=>voiceStatus.textContent='',4000); }
+                    finally { micBtn.classList.remove('processing'); micBtn.textContent = '🎤'; isRecording = false; }
+                };
+                mediaRecorder.start(); isRecording = true;
+                micBtn.classList.add('recording'); micBtn.textContent = '⏹️';
+                voiceStatus.textContent = '🔴 Recording... Click again to stop';
+            } catch (err) {
+                console.error(err);
+                voiceStatus.textContent = err.name === 'NotAllowedError' ? 'Mic access denied.' : 'Mic error: '+err.message;
+                setTimeout(()=>voiceStatus.textContent='',4000);
+            }
+        }
+        function stopRecording() { if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop(); }
+
+        /* ============================================================
+           VOICE OUTPUT — OpenAI TTS-1 via /api/tts
+           ============================================================ */
+        let ttsEnabled = false, currentAudio = null;
+        const ttsToggle = document.getElementById('ttsToggle');
+        const ttsLabel = document.getElementById('ttsLabel');
+        const voiceSelect = document.getElementById('voiceSelect');
+
+        function toggleTTS() {
+            ttsEnabled = !ttsEnabled;
+            if (ttsEnabled) { ttsToggle.classList.add('active'); ttsLabel.textContent = 'AI Voice: ON'; ttsToggle.querySelector('.toggle-icon').textContent = '🔊'; }
+            else { ttsToggle.classList.remove('active'); ttsLabel.textContent = 'AI Voice: OFF'; ttsToggle.querySelector('.toggle-icon').textContent = '🔇'; stopCurrentAudio(); }
+        }
+
+        function stopCurrentAudio() {
+            if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; currentAudio = null; }
+            document.querySelectorAll('.msg-speak-btn.playing').forEach(b => { b.classList.remove('playing'); b.textContent = '🔈'; });
+        }
+
+        function cleanTextForTTS(html) {
+            const t = document.createElement('div'); t.innerHTML = html;
+            t.querySelectorAll('.feedback-buttons').forEach(f=>f.remove());
+            return (t.textContent||t.innerText||'').replace(/\\s+/g,' ').trim();
+        }
+
+        async function playTTS(html, btnEl=null) {
+            stopCurrentAudio();
+            const text = cleanTextForTTS(html);
+            if (!text) return;
+            if (btnEl) { btnEl.classList.add('playing'); btnEl.textContent = '⏳'; }
+            try {
+                const params = new URLSearchParams({ text, voice: voiceSelect.value });
+                const res = await fetch('/api/tts?'+params, { method: 'POST' });
+                if (!res.ok) throw new Error('TTS failed');
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url); currentAudio = audio;
+                if (btnEl) btnEl.textContent = '🔊';
+                audio.onended = () => { currentAudio=null; URL.revokeObjectURL(url); if(btnEl){btnEl.classList.remove('playing');btnEl.textContent='🔈';} };
+                audio.onerror = () => { currentAudio=null; URL.revokeObjectURL(url); if(btnEl){btnEl.classList.remove('playing');btnEl.textContent='🔈';} };
+                await audio.play();
+            } catch (err) { console.error(err); if(btnEl){btnEl.classList.remove('playing');btnEl.textContent='🔈';} }
+        }
+
+        function speakMessage(btn) {
+            const cd = btn.closest('.message-content'); if (!cd) return;
+            if (btn.classList.contains('playing')) { stopCurrentAudio(); return; }
+            playTTS(cd.innerHTML, btn);
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             addMessage("Hello! I'm your ByNoemie fashion assistant. How can I help you today? 👗✨", 'assistant');
         });
@@ -390,7 +597,6 @@ async def chat(request: ChatRequest):
             chat_history=request.conversation_history
         )
         
-        # Reload stock if an order action was completed (create/cancel/modify)
         if response.action_completed:
             reload_stock()
         
@@ -403,7 +609,6 @@ async def chat(request: ChatRequest):
                 if isinstance(tags, str):
                     tags = [t.strip() for t in tags.split(',')]
                 
-                # Get updated stock info
                 product_name_lower = p.get('product_name', '').lower()
                 updated_stock = stock_data.get(product_name_lower, {})
                 total_inv = updated_stock.get('total_inventory', p.get('total_inventory', 0))
@@ -430,11 +635,10 @@ async def chat(request: ChatRequest):
 async def health():
     return {"status": "healthy", "orchestrator": orchestrator is not None, "products": len(products)}
 
-# Static files - create folder if needed
+# Static files
 static_dir = Path("static")
 static_dir.mkdir(exist_ok=True)
 
-# Check if index.html exists
 index_path = static_dir / "index.html"
 if not index_path.exists():
     print("⚠️ static/index.html not found! Creating placeholder...")
